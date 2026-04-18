@@ -13,7 +13,8 @@ use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, I2C0};
 use embassy_rp::peripherals::SPI1;
 use embassy_rp::spi::{Async, Spi};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
+use embassy_sync::channel::{Channel, Receiver};
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
 use nxp_pcf8523::Pcf8523;
@@ -31,16 +32,23 @@ bind_interrupts!(struct Irqs {
     I2C0_IRQ => InterruptHandler<I2C0>;
 });
 
+enum Cmd {
+    ToggleLed
+}
+static CHANNEL: Channel<ThreadModeRawMutex, Cmd, 64> = Channel::new();
+
 #[embassy_executor::task]
-async fn led_task(mut led: Output<'static>) {
+async fn led_task(mut led: Output<'static>, control: Receiver<'static, ThreadModeRawMutex, Cmd, 64>) {
+    info!("led_task");
     loop {
-        led.toggle();
-        Timer::after_secs(1).await;
+        match control.receive().await {
+            Cmd::ToggleLed => led.toggle()
+        }
     }
 }
 
 #[embassy_executor::task]
-async fn lora_tx(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
+async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
     info!("lora_tx");
     let spi_dev = SpiDevice::new(&spi_bus, cs);
     let mut config = Sx127xLoraConfig::default();
@@ -82,6 +90,11 @@ async fn main(spawner: Spawner) {
     //let mut pcf8523 = Pcf8523::new(i2c_bus, Pcf8523T {}).await.unwrap();
     //let mut now = pcf8523.now().await.unwrap();
 
-    spawner.spawn(lora_tx(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
-    spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low)).unwrap());
+    spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
+    spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low), CHANNEL.receiver()).unwrap());
+
+    loop {
+        CHANNEL.sender().send(Cmd::ToggleLed).await;
+        Timer::after_secs(1).await;
+    }
 }
