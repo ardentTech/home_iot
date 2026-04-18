@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+mod command;
+
 use core::sync::atomic::{AtomicBool, Ordering};
 #[allow(unused_imports)]
 use defmt::*;
@@ -11,9 +13,10 @@ use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c::{Config, I2c, InterruptHandler};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, I2C0};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, I2C0, UART0, UART1};
 use embassy_rp::peripherals::SPI1;
 use embassy_rp::spi::{Async, Spi};
+use embassy_rp::uart::UartRx;
 use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel::{Channel, Receiver};
 use embassy_sync::mutex::Mutex;
@@ -29,11 +32,23 @@ type Spi1Bus = Mutex<NoopRawMutex, Spi<'static, SPI1, Async>>;
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 
 bind_interrupts!(struct Irqs {
-    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>, embassy_rp::dma::InterruptHandler<DMA_CH2>;
     I2C0_IRQ => InterruptHandler<I2C0>;
+    UART0_IRQ => embassy_rp::uart::InterruptHandler<UART0>;
 });
 
 static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
+
+#[embassy_executor::task]
+async fn uart_rx_task(mut rx: UartRx<'static, embassy_rp::uart::Async>) {
+    loop {
+        // read a total of 4 transmissions (32 / 8) and then print the result
+        let mut buf = [0; 32];
+        rx.read(&mut buf).await.unwrap();
+        info!("RX {:?}", buf);
+        // TODO parse cmd
+    }
+}
 
 #[embassy_executor::task]
 async fn led_task(mut led: Output<'static>) {
@@ -92,6 +107,12 @@ async fn main(spawner: Spawner) {
     //let mut pcf8523 = Pcf8523::new(i2c_bus, Pcf8523T {}).await.unwrap();
     //let mut now = pcf8523.now().await.unwrap();
 
+    // uart
+    let uart_rx = UartRx::new(p.UART0, p.PIN_1, Irqs, p.DMA_CH2, embassy_rp::uart::Config::default());
+
     spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
     spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low)).unwrap());
+
+    #[cfg(debug_assertions)]
+    spawner.spawn(uart_rx_task(uart_rx).unwrap());
 }
