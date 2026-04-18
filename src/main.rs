@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use core::sync::atomic::{AtomicBool, Ordering};
 #[allow(unused_imports)]
 use defmt::*;
 #[allow(unused_imports)]
@@ -16,7 +17,7 @@ use embassy_rp::spi::{Async, Spi};
 use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel::{Channel, Receiver};
 use embassy_sync::mutex::Mutex;
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::Pcf8523T;
 use static_cell::StaticCell;
@@ -32,18 +33,18 @@ bind_interrupts!(struct Irqs {
     I2C0_IRQ => InterruptHandler<I2C0>;
 });
 
-enum Cmd {
-    ToggleLed
-}
-static CHANNEL: Channel<ThreadModeRawMutex, Cmd, 64> = Channel::new();
+static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
-async fn led_task(mut led: Output<'static>, control: Receiver<'static, ThreadModeRawMutex, Cmd, 64>) {
+async fn led_task(mut led: Output<'static>) {
     info!("led_task");
     loop {
-        match control.receive().await {
-            Cmd::ToggleLed => led.toggle()
+        // TODO could use compare_exchange?
+        if LED_TOGGLE.load(Ordering::Relaxed) {
+            led.toggle();
+            LED_TOGGLE.store(false, Ordering::Relaxed);
         }
+        Timer::after(Duration::from_millis(100)).await;
     }
 }
 
@@ -62,6 +63,7 @@ async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
 
     loop {
         sx127x.transmit("howdy".as_bytes()).await.expect("transmit failed :(");
+        LED_TOGGLE.store(true, Ordering::Relaxed);
         Timer::after_secs(3).await;
         info!("lora_tx looping around...");
     }
@@ -91,10 +93,5 @@ async fn main(spawner: Spawner) {
     //let mut now = pcf8523.now().await.unwrap();
 
     spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
-    spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low), CHANNEL.receiver()).unwrap());
-
-    loop {
-        CHANNEL.sender().send(Cmd::ToggleLed).await;
-        Timer::after_secs(1).await;
-    }
+    spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low)).unwrap());
 }
