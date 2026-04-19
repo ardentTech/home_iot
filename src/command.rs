@@ -1,3 +1,3 @@
 pub(crate) enum Command {
-    BlinkLed = 0x0,
+    ToggleLed = 0x0,
 }

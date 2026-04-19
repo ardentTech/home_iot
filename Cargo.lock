@@ -69,6 +69,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
 
 [[package]]
+name = "bitfields"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef6e59298da389bc0649c7463856b34c6e17fe542f88939426ede4436c6b1195"
+dependencies = [
+ "bitfields-impl",
+]
+
+[[package]]
+name = "bitfields-impl"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2c044f98f86f15414668d6c8187c7e4fadab1ad2b31680f648703e0fe07c555"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "thiserror",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -716,10 +737,22 @@ dependencies = [
  "embassy-rp",
  "embassy-sync",
  "embassy-time",
+ "honeywell_mpr",
  "nxp-pcf8523",
  "panic-probe",
  "static_cell",
  "sx127x-lora",
+]
+
+[[package]]
+name = "honeywell_mpr"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "024fd488a7717062125996ef4e66bcf7895173270d32e71da5b6ce5d2bd3865e"
+dependencies = [
+ "bitfields",
+ "embedded-hal-async",
+ "maybe-async",
 ]
 
 [[package]]
