@@ -5,6 +5,7 @@ mod command;
 mod event;
 mod env_reading;
 
+use core::convert::Infallible;
 use core::sync::atomic::{AtomicBool, Ordering};
 #[allow(unused_imports)]
 use defmt::*;
@@ -12,6 +13,7 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 #[allow(unused_imports)]
 use {defmt_rtt as _, panic_probe as _};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
+use embassy_embedded_hal::shared_bus::SpiDeviceError;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_rp::bind_interrupts;
@@ -19,7 +21,7 @@ use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, I2C0, UART0, UART1};
 use embassy_rp::peripherals::SPI1;
-use embassy_rp::spi::{Async, Spi};
+use embassy_rp::spi::{Async, Error, Spi};
 use embassy_rp::uart::UartRx;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel;
@@ -32,8 +34,8 @@ use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::Pcf8523T;
 use packed_struct::PackedStruct;
 use static_cell::StaticCell;
-use sx127x_lora::driver::{Sx127xLora, Sx127xLoraConfig};
-use sx127x_lora::types::{Dio0Signal, Interrupt, SpreadingFactor};
+use sx127x_lora::driver::{Sx127xError, Sx127xLora, Sx127xLoraConfig};
+use sx127x_lora::types::{DeviceMode, Dio0Signal, Interrupt, SpreadingFactor};
 use crate::env_reading::EnvReading;
 use crate::event::Event;
 use crate::event::Event::*;
@@ -53,7 +55,7 @@ bind_interrupts!(struct Irqs {
 static ENV_READING_READY: Signal<CriticalSectionRawMutex, EnvReading> = Signal::new();
 static TX_DONE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Channel for events from worker tasks to the orchestrator
-static EVENT_CHANNEL: channel::Channel<CriticalSectionRawMutex, Event, 10> = channel::Channel::new();
+static EVENT_CHANNEL: channel::Channel<CriticalSectionRawMutex, Event, 10> = Channel::new();
 static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
 
 // #[embassy_executor::task]
@@ -69,7 +71,7 @@ static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
 
 // #[embassy_executor::task]
 // async fn led_task(mut led: Output<'static>) {
-//     info!("led_task");TxDone
+//     info!("led_task");
 //     loop {
 //         // TODO could use compare_exchange?
 //         if LED_TOGGLE.load(Ordering::Relaxed) {
@@ -82,7 +84,7 @@ static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
 async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
-    info!("lora_task");
+    //info!("lora_task");
     let spi_dev = SpiDevice::new(&spi_bus, cs);
     let mut config = Sx127xLoraConfig::default();
     config.frequency = LORA_FREQUENCY_HZ;
@@ -96,24 +98,49 @@ async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
 
     loop {
         match select(ENV_READING_READY.wait(), TX_DONE.wait()).await {
-            Either::First(_) => {
-                let env_reading = ENV_READING_READY.wait().await;
-                info!("env_reading {:?}", env_reading);
-                sx127x.transmit("Howdy!".as_bytes()).await.expect("transmit failed :(");
+            Either::First(env_reading) => {
+                lora_tx(&mut sx127x, env_reading).await
             },
             Either::Second(_) => {
                 info!("clearing dio0");
                 sx127x.clear_interrupt(Interrupt::TxDone).await.expect("clear interrupt TxDone failed :(");
             }
         }
+    }
+}
 
-        // let payload: [u8; 1] = env_reading.pack().unwrap();
-        // let mut buffer = [0; 128];
-        // for (i, b) in payload.iter().enumerate() {
-        //     buffer[i] = *b;
-        // }
-        //
-        // sx127x.transmit(&buffer).await.expect("transmit failed :(");
+async fn lora_tx(sx127x: &mut Sx127xLora<SpiDevice<'_, NoopRawMutex, Spi<'_, SPI1, Async>, Output<'_>>>, env_reading: EnvReading) {
+    let payload: [u8; 1] = env_reading.pack().unwrap();
+    let mut buffer = [0; 128];
+    for (i, b) in payload.iter().enumerate() {
+        buffer[i] = *b;
+    }
+    info!("buffer: {:?}", buffer);
+
+    // if sx127x.device_mode().await.unwrap() == DeviceMode::TX {
+    //     let mut retries_left: u8 = 3;
+    //     while retries_left > 0 {
+    //         Timer::after_secs(1).await;
+    //         if sx127x.device_mode().await.unwrap() == DeviceMode::TX {
+    //             retries_left -= 1;
+    //         }
+    //     }
+    //     // TODO some sort of err event
+    // }
+
+    match sx127x.transmit(&buffer).await {
+        Ok(_) => info!("lora tx started"),
+        Err(e) => match e {
+            // TODO need better way to handle this...
+            Sx127xError::InvalidFdev => error!("Sx127xError::InvalidFdev"),
+            Sx127xError::InvalidInput => error!("Sx127xError::InvalidInput"),
+            Sx127xError::InvalidPayloadLength => error!("Sx127xError::InvalidPayloadLength"),
+            Sx127xError::InvalidPreambleLength => error!("Sx127xError::InvalidPreambleLength"),
+            Sx127xError::InvalidState => error!("Sx127xError::InvalidState"),
+            Sx127xError::InvalidSymbolTimeout => error!("Sx127xError::InvalidSymbolTimeout"),
+            Sx127xError::PacketTermination => error!("Sx127xError::PacketTermination"),
+            Sx127xError::SPI(_) => error!("Sx127xError::SPI"),
+        }
     }
 }
 
@@ -199,6 +226,6 @@ async fn main(spawner: Spawner) {
     // this is effectively the main task
     loop {
         spawner.spawn(pressure_sensor_task(i2c_bus).unwrap());
-        Timer::after_secs(3).await;
+        Timer::after_secs(5).await;
     }
 }
