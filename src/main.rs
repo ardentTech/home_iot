@@ -43,6 +43,7 @@ use crate::types::LoraBuffer;
 
 type I2c0Bus = Mutex<NoopRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>;
 type Spi1Bus = Mutex<NoopRawMutex, Spi<'static, SPI1, Async>>;
+type Rtc = Mutex<NoopRawMutex, Pcf8523<I2cDevice<'static, NoopRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>, Pcf8523T>>;
 
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 
@@ -152,12 +153,21 @@ async fn lora_tx_done_task(mut dio0: Input<'static>) {
 }
 
 #[embassy_executor::task]
-async fn orchestrator_task(_spawner: Spawner) {
+async fn orchestrator_task(_spawner: Spawner, rtc: &'static Rtc) {
     let receiver = EVENT_CHANNEL.receiver();
     loop {
         let event = receiver.receive().await;
         match event {
-            PressureRead(mpr_reading) => ENV_READING_READY.signal(EnvReading::new(mpr_reading.psi() as u8)),
+            PressureRead(mpr_reading) => {
+                let mut rtc = rtc.lock().await;
+                info!("timestamp: {}", rtc.now().await.unwrap().timestamp());
+                ENV_READING_READY.signal(
+                    EnvReading::new(
+                        mpr_reading.psi() as u8,
+                        rtc.now().await.unwrap().timestamp()
+                    )
+                )
+            },
             LoraTxDone => TX_DONE.signal(()),
             LoraTxNoRetriesLeft => error!("lora tx failed :("),
             RtcSecondAlarm => info!("RTC second alarm"),
@@ -182,12 +192,23 @@ async fn pressure_sensor_task(i2c_bus: &'static I2c0Bus) {
     }
 }
 
+// #[embassy_executor::task]
+// async fn rtc_task(i2c_bus: &'static I2c0Bus, mut int1_pin: Input<'static>) {
+//     let sender = EVENT_CHANNEL.sender();
+//     let i2c_dev = I2cDevice::new(i2c_bus);
+//     let mut pcf8523 = Pcf8523::new(i2c_dev, Pcf8523T {}).await.unwrap();
+//     pcf8523.start_second_timer(Pulsed).await.unwrap();
+//
+//     loop {
+//         // TODO use another alarm
+//         int1_pin.wait_for_falling_edge().await;
+//         sender.send(RtcSecondAlarm).await;
+//     }
+// }
+
 #[embassy_executor::task]
-async fn rtc_task(i2c_bus: &'static I2c0Bus, mut int1_pin: Input<'static>) {
+async fn rtc_alarm_task(mut int1_pin: Input<'static>) {
     let sender = EVENT_CHANNEL.sender();
-    let i2c_dev = I2cDevice::new(i2c_bus);
-    let mut pcf8523 = Pcf8523::new(i2c_dev, Pcf8523T {}).await.unwrap();
-    pcf8523.start_second_timer(Pulsed).await.unwrap();
 
     loop {
         // TODO use another alarm
@@ -217,14 +238,24 @@ async fn main(spawner: Spawner) {
     static I2C0_BUS: StaticCell<I2c0Bus> = StaticCell::new();
     let i2c_bus = I2C0_BUS.init(Mutex::new(i2c));
 
+    // rtc
+    //let sender = EVENT_CHANNEL.sender();
+    //let i2c_dev = I2cDevice::new(i2c_bus);
+    let mut pcf8523 = Pcf8523::new(I2cDevice::new(i2c_bus), Pcf8523T {}).await.unwrap();
+    pcf8523.start_second_timer(Pulsed).await.unwrap();
+//    static SHARED_RTC: StaticCell<Pcf8523<I2cDevice<NoopRawMutex, I2c<I2C0, embassy_rp::i2c::Async>>, Pcf8523T>> = StaticCell::new();
+    static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
+    let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
+
     // uart
     //let uart_rx = UartRx::new(p.UART0, p.PIN_1, Irqs, p.DMA_CH2, embassy_rp::uart::Config::default());
 
-    spawner.spawn(orchestrator_task(spawner).unwrap());
+    spawner.spawn(orchestrator_task(spawner, shared_rtc).unwrap());
 
+    spawner.spawn(rtc_alarm_task(Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
     spawner.spawn(lora_tx_done_task(Input::new(p.PIN_15, Pull::Down)).unwrap());
-    spawner.spawn(rtc_task(i2c_bus, Input::new(p.PIN_8, Pull::Up)).unwrap());
+
     // spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low)).unwrap());
 
     // TODO could set system state in a single place instead of multiple #[cfg(debug_assertions)] s

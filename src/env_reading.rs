@@ -7,13 +7,14 @@ use crate::types::LoraBuffer;
 #[packed_struct(endian = "lsb")]
 pub(crate) struct EnvReading {
     #[packed_field()]
-    psi: u8 // TODO should be able to pack this into... 5 bits?
+    psi: u8, // TODO should be able to pack this into... 5 bits?
+    timestamp: u32
 }
 
 // TODO timestamp
 impl EnvReading {
-    pub(crate) fn new(psi: u8) -> Self {
-        Self { psi }
+    pub(crate) fn new(psi: u8, timestamp: u32) -> Self {
+        Self { psi, timestamp }
     }
 }
 
@@ -25,7 +26,7 @@ impl Format for EnvReading {
 
 impl Into<LoraBuffer> for EnvReading {
     fn into(self) -> LoraBuffer {
-        let payload: [u8; 1] = self.pack().unwrap();
+        let payload: [u8; 5] = self.pack().unwrap();
         let mut buffer = [0; 128];
         for (i, b) in payload.iter().enumerate() {
             buffer[i] = *b;
