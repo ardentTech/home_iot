@@ -1,3 +1,4 @@
 pub(crate) enum Event {
-    PressureSensorRead(honeywell_mpr::Reading)
+    PressureRead(honeywell_mpr::Reading),
+    LoraTxDone,
 }

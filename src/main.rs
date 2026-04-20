@@ -3,6 +3,7 @@
 
 mod command;
 mod event;
+mod env_reading;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 #[allow(unused_imports)]
@@ -12,8 +13,9 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use {defmt_rtt as _, panic_probe as _};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embassy_rp::bind_interrupts;
-use embassy_rp::gpio::{Level, Output};
+use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, I2C0, UART0, UART1};
 use embassy_rp::peripherals::SPI1;
@@ -23,14 +25,18 @@ use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, T
 use embassy_sync::channel;
 use embassy_sync::channel::{Channel, Receiver};
 use embassy_sync::mutex::Mutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use honeywell_mpr::{Mpr, MprConfig, TransferFunction};
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::Pcf8523T;
+use packed_struct::PackedStruct;
 use static_cell::StaticCell;
 use sx127x_lora::driver::{Sx127xLora, Sx127xLoraConfig};
-use sx127x_lora::types::SpreadingFactor;
+use sx127x_lora::types::{Dio0Signal, Interrupt, SpreadingFactor};
+use crate::env_reading::EnvReading;
 use crate::event::Event;
+use crate::event::Event::*;
 
 type I2c0Bus = Mutex<NoopRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>;
 type Spi1Bus = Mutex<NoopRawMutex, Spi<'static, SPI1, Async>>;
@@ -43,37 +49,40 @@ bind_interrupts!(struct Irqs {
     UART0_IRQ => embassy_rp::uart::InterruptHandler<UART0>;
 });
 
+// TODO could group these together as... enum LoraSIgnal ?
+static ENV_READING_READY: Signal<CriticalSectionRawMutex, EnvReading> = Signal::new();
+static TX_DONE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Channel for events from worker tasks to the orchestrator
 static EVENT_CHANNEL: channel::Channel<CriticalSectionRawMutex, Event, 10> = channel::Channel::new();
 static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
 
-#[embassy_executor::task]
-async fn uart_rx_task(mut rx: UartRx<'static, embassy_rp::uart::Async>) {
-    loop {
-        // read a total of 4 transmissions (32 / 8) and then print the result
-        let mut buf = [0; 32];
-        rx.read(&mut buf).await.unwrap();
-        info!("RX {:?}", buf);
-        // TODO parse cmd
-    }
-}
+// #[embassy_executor::task]
+// async fn uart_rx_task(mut rx: UartRx<'static, embassy_rp::uart::Async>) {
+//     loop {
+//         // read a total of 4 transmissions (32 / 8) and then print the result
+//         let mut buf = [0; 32];
+//         rx.read(&mut buf).await.unwrap();
+//         info!("RX {:?}", buf);
+//         // TODO parse cmd
+//     }
+// }
 
-#[embassy_executor::task]
-async fn led_task(mut led: Output<'static>) {
-    info!("led_task");
-    loop {
-        // TODO could use compare_exchange?
-        if LED_TOGGLE.load(Ordering::Relaxed) {
-            led.toggle();
-            LED_TOGGLE.store(false, Ordering::Relaxed);
-        }
-        Timer::after(Duration::from_millis(100)).await;
-    }
-}
+// #[embassy_executor::task]
+// async fn led_task(mut led: Output<'static>) {
+//     info!("led_task");TxDone
+//     loop {
+//         // TODO could use compare_exchange?
+//         if LED_TOGGLE.load(Ordering::Relaxed) {
+//             led.toggle();
+//             LED_TOGGLE.store(false, Ordering::Relaxed);
+//         }
+//         Timer::after(Duration::from_millis(100)).await;
+//     }
+// }
 
 #[embassy_executor::task]
 async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
-    info!("lora_tx");
+    info!("lora_task");
     let spi_dev = SpiDevice::new(&spi_bus, cs);
     let mut config = Sx127xLoraConfig::default();
     config.frequency = LORA_FREQUENCY_HZ;
@@ -83,12 +92,39 @@ async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
     // symbol duration (~33ms) is > 16ms so enable low data rate optimize
     sx127x.set_low_data_rate_optimize(true).await.expect("set_low_data_rate_optimize failed :(");
     sx127x.set_pa_boost(20).await.expect("set_amplifier_boost failed :(");
+    sx127x.set_dio0(Dio0Signal::TxDone).await.expect("set_dio0 failed :(");
 
     loop {
-        sx127x.transmit("howdy".as_bytes()).await.expect("transmit failed :(");
-        LED_TOGGLE.store(true, Ordering::Relaxed);
-        Timer::after_secs(3).await;
-        info!("lora_tx looping around...");
+        match select(ENV_READING_READY.wait(), TX_DONE.wait()).await {
+            Either::First(_) => {
+                let env_reading = ENV_READING_READY.wait().await;
+                info!("env_reading {:?}", env_reading);
+                sx127x.transmit("Howdy!".as_bytes()).await.expect("transmit failed :(");
+            },
+            Either::Second(_) => {
+                info!("clearing dio0");
+                sx127x.clear_interrupt(Interrupt::TxDone).await.expect("clear interrupt TxDone failed :(");
+            }
+        }
+
+        // let payload: [u8; 1] = env_reading.pack().unwrap();
+        // let mut buffer = [0; 128];
+        // for (i, b) in payload.iter().enumerate() {
+        //     buffer[i] = *b;
+        // }
+        //
+        // sx127x.transmit(&buffer).await.expect("transmit failed :(");
+    }
+}
+
+#[embassy_executor::task]
+async fn lora_tx_done_task(mut dio0: Input<'static>) {
+    let sender = EVENT_CHANNEL.sender();
+
+    loop {
+        dio0.wait_for_high().await;
+        sender.send(LoraTxDone).await;
+        Timer::after_millis(100).await;
     }
 }
 
@@ -99,14 +135,8 @@ async fn orchestrator_task(_spawner: Spawner) {
         // Do nothing until we receive any event
         let event = receiver.receive().await;
         match event {
-            Event::PressureSensorRead(reading) => info!(
-                    "bar: {}, inHg: {}, mmHg: {}, kPa: {}, psi: {}",
-                    reading.bar(),
-                    reading.inhg(),
-                    reading.mmhg(),
-                    reading.kpa(),
-                    reading.psi()
-                )
+            PressureRead(mpr_reading) => ENV_READING_READY.signal(EnvReading::new(mpr_reading)),
+            LoraTxDone => TX_DONE.signal(()),
         }
     }
 }
@@ -123,7 +153,7 @@ async fn pressure_sensor_task(i2c_bus: &'static I2c0Bus) {
     }
     Timer::after(Duration::from_millis(10)).await;
     match sensor.read().await {
-        Ok(reading) => sender.send(Event::PressureSensorRead(reading)).await,
+        Ok(reading) => sender.send(Event::PressureRead(reading)).await,
         Err(_) => error!("MPR error: read() failed :("),
     }
 }
@@ -145,7 +175,6 @@ async fn main(spawner: Spawner) {
     let scl = p.PIN_17;
     let mut config = Config::default();
     config.frequency = 400_000;
-    //config.frequency = 1_000_000; // TODO for LoRa
     let i2c = I2c::new_async(p.I2C0, scl, sda, Irqs, config);
     static I2C0_BUS: StaticCell<I2c0Bus> = StaticCell::new();
     let i2c_bus = I2C0_BUS.init(Mutex::new(i2c));
@@ -159,13 +188,15 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(orchestrator_task(spawner).unwrap());
 
-    // spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
+    spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
+    spawner.spawn(lora_tx_done_task(Input::new(p.PIN_15, Pull::Down)).unwrap());
     // spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low)).unwrap());
 
     // TODO could set system state in a single place instead of multiple #[cfg(debug_assertions)] s
     //#[cfg(debug_assertions)]
     //spawner.spawn(uart_rx_task(uart_rx).unwrap());
 
+    // this is effectively the main task
     loop {
         spawner.spawn(pressure_sensor_task(i2c_bus).unwrap());
         Timer::after_secs(3).await;

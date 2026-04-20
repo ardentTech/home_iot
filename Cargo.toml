@@ -9,11 +9,13 @@ defmt = "1.0.1"
 defmt-rtt = "1.0.0"
 embassy-embedded-hal = "0.6.0"
 embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
+embassy-futures = "0.1.2"
 embassy-rp = { version = "0.10.0", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xa", "binary-info"] }
 embassy-sync = "0.8.0"
 embassy-time = { version = "0.5.0", features = ["defmt", "defmt-timestamp-uptime"] }
 honeywell_mpr = "0.1.0"
 nxp-pcf8523 = "2.0.0"
+packed_struct = { version = "0.10.1", default-features = false }
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 static_cell = "2.1.1"
 sx127x-lora = { git = "https://github.com/ardentTech/sx127x-lora.git", rev = "115580a" }
