@@ -4,16 +4,15 @@
 mod command;
 mod event;
 mod env_reading;
+mod types;
 
-use core::convert::Infallible;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool};
 #[allow(unused_imports)]
 use defmt::*;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 #[allow(unused_imports)]
 use {defmt_rtt as _, panic_probe as _};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
-use embassy_embedded_hal::shared_bus::SpiDeviceError;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_rp::bind_interrupts;
@@ -39,6 +38,7 @@ use sx127x_lora::types::{DeviceMode, Dio0Signal, Interrupt, SpreadingFactor};
 use crate::env_reading::EnvReading;
 use crate::event::Event;
 use crate::event::Event::*;
+use crate::types::LoraBuffer;
 
 type I2c0Bus = Mutex<NoopRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>;
 type Spi1Bus = Mutex<NoopRawMutex, Spi<'static, SPI1, Async>>;
@@ -84,7 +84,6 @@ static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
 async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
-    //info!("lora_task");
     let spi_dev = SpiDevice::new(&spi_bus, cs);
     let mut config = Sx127xLoraConfig::default();
     config.frequency = LORA_FREQUENCY_HZ;
@@ -99,7 +98,7 @@ async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
     loop {
         match select(ENV_READING_READY.wait(), TX_DONE.wait()).await {
             Either::First(env_reading) => {
-                lora_tx(&mut sx127x, env_reading).await
+                lora_tx(&mut sx127x, env_reading.into(), 3).await
             },
             Either::Second(_) => {
                 info!("clearing dio0");
@@ -109,39 +108,34 @@ async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
     }
 }
 
-async fn lora_tx(sx127x: &mut Sx127xLora<SpiDevice<'_, NoopRawMutex, Spi<'_, SPI1, Async>, Output<'_>>>, env_reading: EnvReading) {
-    let payload: [u8; 1] = env_reading.pack().unwrap();
-    let mut buffer = [0; 128];
-    for (i, b) in payload.iter().enumerate() {
-        buffer[i] = *b;
-    }
-    info!("buffer: {:?}", buffer);
+async fn lora_tx(
+    sx127x: &mut Sx127xLora<SpiDevice<'_, NoopRawMutex, Spi<'_, SPI1, Async>, Output<'_>>>,
+    buffer: LoraBuffer,
+    retries: u8
+) {
+    let sender = EVENT_CHANNEL.sender();
 
-    // if sx127x.device_mode().await.unwrap() == DeviceMode::TX {
-    //     let mut retries_left: u8 = 3;
-    //     while retries_left > 0 {
-    //         Timer::after_secs(1).await;
-    //         if sx127x.device_mode().await.unwrap() == DeviceMode::TX {
-    //             retries_left -= 1;
-    //         }
-    //     }
-    //     // TODO some sort of err event
-    // }
-
-    match sx127x.transmit(&buffer).await {
-        Ok(_) => info!("lora tx started"),
-        Err(e) => match e {
-            // TODO need better way to handle this...
-            Sx127xError::InvalidFdev => error!("Sx127xError::InvalidFdev"),
-            Sx127xError::InvalidInput => error!("Sx127xError::InvalidInput"),
-            Sx127xError::InvalidPayloadLength => error!("Sx127xError::InvalidPayloadLength"),
-            Sx127xError::InvalidPreambleLength => error!("Sx127xError::InvalidPreambleLength"),
-            Sx127xError::InvalidState => error!("Sx127xError::InvalidState"),
-            Sx127xError::InvalidSymbolTimeout => error!("Sx127xError::InvalidSymbolTimeout"),
-            Sx127xError::PacketTermination => error!("Sx127xError::PacketTermination"),
-            Sx127xError::SPI(_) => error!("Sx127xError::SPI"),
+    for _ in 1..=retries {
+        match sx127x.transmit(&buffer).await {
+            Ok(_) => return,
+            Err(e) => {
+                match e {
+                    // TODO need better way to handle this...
+                    Sx127xError::InvalidFdev => error!("Sx127xError::InvalidFdev"),
+                    Sx127xError::InvalidInput => error!("Sx127xError::InvalidInput"),
+                    Sx127xError::InvalidPayloadLength => error!("Sx127xError::InvalidPayloadLength"),
+                    Sx127xError::InvalidPreambleLength => error!("Sx127xError::InvalidPreambleLength"),
+                    Sx127xError::InvalidState => error!("Sx127xError::InvalidState"),
+                    Sx127xError::InvalidSymbolTimeout => error!("Sx127xError::InvalidSymbolTimeout"),
+                    Sx127xError::PacketTermination => error!("Sx127xError::PacketTermination"),
+                    Sx127xError::SPI(_) => error!("Sx127xError::SPI"),
+                }
+                Timer::after_millis(1_000).await;
+            }
         }
     }
+    sender.send(LoraTxNoRetriesLeft).await;
+
 }
 
 #[embassy_executor::task]
@@ -159,11 +153,11 @@ async fn lora_tx_done_task(mut dio0: Input<'static>) {
 async fn orchestrator_task(_spawner: Spawner) {
     let receiver = EVENT_CHANNEL.receiver();
     loop {
-        // Do nothing until we receive any event
         let event = receiver.receive().await;
         match event {
             PressureRead(mpr_reading) => ENV_READING_READY.signal(EnvReading::new(mpr_reading)),
             LoraTxDone => TX_DONE.signal(()),
+            LoraTxNoRetriesLeft => error!("lora tx failed :(")
         }
     }
 }
@@ -226,6 +220,7 @@ async fn main(spawner: Spawner) {
     // this is effectively the main task
     loop {
         spawner.spawn(pressure_sensor_task(i2c_bus).unwrap());
+        // TODO use rtc alarm for this
         Timer::after_secs(5).await;
     }
 }
