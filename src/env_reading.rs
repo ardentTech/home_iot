@@ -12,8 +12,8 @@ pub(crate) struct EnvReading {
 
 // TODO timestamp
 impl EnvReading {
-    pub(crate) fn new(mpr_reading: honeywell_mpr::Reading) -> Self {
-        Self { psi: mpr_reading.psi() as u8 }
+    pub(crate) fn new(psi: u8) -> Self {
+        Self { psi }
     }
 }
 

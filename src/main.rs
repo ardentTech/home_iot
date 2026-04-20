@@ -53,10 +53,10 @@ bind_interrupts!(struct Irqs {
 });
 
 // TODO could group these together as... enum LoraSIgnal ?
-static ENV_READING_READY: Signal<CriticalSectionRawMutex, EnvReading> = Signal::new();
-static TX_DONE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static ENV_READING_READY: Signal<ThreadModeRawMutex, EnvReading> = Signal::new();
+static TX_DONE: Signal<ThreadModeRawMutex, ()> = Signal::new();
 /// Channel for events from worker tasks to the orchestrator
-static EVENT_CHANNEL: channel::Channel<CriticalSectionRawMutex, Event, 10> = Channel::new();
+static EVENT_CHANNEL: Channel<ThreadModeRawMutex, Event, 10> = Channel::new();
 static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
 
 // #[embassy_executor::task]
@@ -157,7 +157,7 @@ async fn orchestrator_task(_spawner: Spawner) {
     loop {
         let event = receiver.receive().await;
         match event {
-            PressureRead(mpr_reading) => ENV_READING_READY.signal(EnvReading::new(mpr_reading)),
+            PressureRead(mpr_reading) => ENV_READING_READY.signal(EnvReading::new(mpr_reading.psi() as u8)),
             LoraTxDone => TX_DONE.signal(()),
             LoraTxNoRetriesLeft => error!("lora tx failed :("),
             RtcSecondAlarm => info!("RTC second alarm"),
@@ -190,6 +190,7 @@ async fn rtc_task(i2c_bus: &'static I2c0Bus, mut int1_pin: Input<'static>) {
     pcf8523.start_second_timer(Pulsed).await.unwrap();
 
     loop {
+        // TODO use another alarm
         int1_pin.wait_for_falling_edge().await;
         sender.send(RtcSecondAlarm).await;
     }
