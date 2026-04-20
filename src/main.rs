@@ -31,6 +31,7 @@ use embassy_time::{Duration, Timer};
 use honeywell_mpr::{Mpr, MprConfig, TransferFunction};
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::Pcf8523T;
+use nxp_pcf8523::typedefs::TimerInterruptMode::Pulsed;
 use packed_struct::PackedStruct;
 use static_cell::StaticCell;
 use sx127x_lora::driver::{Sx127xError, Sx127xLora, Sx127xLoraConfig};
@@ -138,6 +139,7 @@ async fn lora_tx(
 
 }
 
+// TODO i think this can go into lora_task
 #[embassy_executor::task]
 async fn lora_tx_done_task(mut dio0: Input<'static>) {
     let sender = EVENT_CHANNEL.sender();
@@ -157,7 +159,8 @@ async fn orchestrator_task(_spawner: Spawner) {
         match event {
             PressureRead(mpr_reading) => ENV_READING_READY.signal(EnvReading::new(mpr_reading)),
             LoraTxDone => TX_DONE.signal(()),
-            LoraTxNoRetriesLeft => error!("lora tx failed :(")
+            LoraTxNoRetriesLeft => error!("lora tx failed :("),
+            RtcSecondAlarm => info!("RTC second alarm"),
         }
     }
 }
@@ -176,6 +179,19 @@ async fn pressure_sensor_task(i2c_bus: &'static I2c0Bus) {
     match sensor.read().await {
         Ok(reading) => sender.send(Event::PressureRead(reading)).await,
         Err(_) => error!("MPR error: read() failed :("),
+    }
+}
+
+#[embassy_executor::task]
+async fn rtc_task(i2c_bus: &'static I2c0Bus, mut int1_pin: Input<'static>) {
+    let sender = EVENT_CHANNEL.sender();
+    let i2c_dev = I2cDevice::new(i2c_bus);
+    let mut pcf8523 = Pcf8523::new(i2c_dev, Pcf8523T {}).await.unwrap();
+    pcf8523.start_second_timer(Pulsed).await.unwrap();
+
+    loop {
+        int1_pin.wait_for_falling_edge().await;
+        sender.send(RtcSecondAlarm).await;
     }
 }
 
@@ -200,10 +216,6 @@ async fn main(spawner: Spawner) {
     static I2C0_BUS: StaticCell<I2c0Bus> = StaticCell::new();
     let i2c_bus = I2C0_BUS.init(Mutex::new(i2c));
 
-    // rtc
-    //let mut pcf8523 = Pcf8523::new(i2c_bus, Pcf8523T {}).await.unwrap();
-    //let mut now = pcf8523.now().await.unwrap();
-
     // uart
     //let uart_rx = UartRx::new(p.UART0, p.PIN_1, Irqs, p.DMA_CH2, embassy_rp::uart::Config::default());
 
@@ -211,6 +223,7 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
     spawner.spawn(lora_tx_done_task(Input::new(p.PIN_15, Pull::Down)).unwrap());
+    spawner.spawn(rtc_task(i2c_bus, Input::new(p.PIN_8, Pull::Up)).unwrap());
     // spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low)).unwrap());
 
     // TODO could set system state in a single place instead of multiple #[cfg(debug_assertions)] s
