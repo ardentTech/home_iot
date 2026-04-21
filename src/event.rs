@@ -1,6 +1,9 @@
 pub(crate) enum Event {
     PressureRead(honeywell_mpr::Reading),
+    PressureReadErr,
+    LoraTxDoneInterruptCleared,
+    LoraTxDoneInterruptClearedErr,
     LoraTxDone,
-    LoraTxNoRetriesLeft,
-    RtcSecondAlarm
+    LoraTxStarted,
+    RtcAlarm,
 }

@@ -30,8 +30,9 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use honeywell_mpr::{Mpr, MprConfig, TransferFunction};
 use nxp_pcf8523::Pcf8523;
-use nxp_pcf8523::typedefs::Pcf8523T;
+use nxp_pcf8523::typedefs::{Pcf8523T, TimerA, TimerSourceClock};
 use nxp_pcf8523::typedefs::TimerInterruptMode::Pulsed;
+use nxp_pcf8523::typedefs::TimerMode::Countdown;
 use packed_struct::PackedStruct;
 use static_cell::StaticCell;
 use sx127x_lora::driver::{Sx127xError, Sx127xLora, Sx127xLoraConfig};
@@ -56,88 +57,40 @@ bind_interrupts!(struct Irqs {
 // TODO could group these together as... enum LoraSIgnal ?
 static ENV_READING_READY: Signal<ThreadModeRawMutex, EnvReading> = Signal::new();
 static TX_DONE: Signal<ThreadModeRawMutex, ()> = Signal::new();
+static RTC_ALARM: Signal<ThreadModeRawMutex, ()> = Signal::new();
 /// Channel for events from worker tasks to the orchestrator
 static EVENT_CHANNEL: Channel<ThreadModeRawMutex, Event, 10> = Channel::new();
-static LED_TOGGLE: AtomicBool = AtomicBool::new(false);
-
-// #[embassy_executor::task]
-// async fn uart_rx_task(mut rx: UartRx<'static, embassy_rp::uart::Async>) {
-//     loop {
-//         // read a total of 4 transmissions (32 / 8) and then print the result
-//         let mut buf = [0; 32];
-//         rx.read(&mut buf).await.unwrap();
-//         info!("RX {:?}", buf);
-//         // TODO parse cmd
-//     }
-// }
-
-// #[embassy_executor::task]
-// async fn led_task(mut led: Output<'static>) {
-//     info!("led_task");
-//     loop {
-//         // TODO could use compare_exchange?
-//         if LED_TOGGLE.load(Ordering::Relaxed) {
-//             led.toggle();
-//             LED_TOGGLE.store(false, Ordering::Relaxed);
-//         }
-//         Timer::after(Duration::from_millis(100)).await;
-//     }
-// }
 
 #[embassy_executor::task]
 async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>) {
+    let sender = EVENT_CHANNEL.sender();
     let spi_dev = SpiDevice::new(&spi_bus, cs);
     let mut config = Sx127xLoraConfig::default();
     config.frequency = LORA_FREQUENCY_HZ;
-    config.spreading_factor = SpreadingFactor::Sf12;
     let mut sx127x = Sx127xLora::new(spi_dev, config).await.expect("driver init failed :(");
     sx127x.set_temp_monitor(false).await.expect("disable temp monitor failed :(");
     // symbol duration (~33ms) is > 16ms so enable low data rate optimize
-    sx127x.set_low_data_rate_optimize(true).await.expect("set_low_data_rate_optimize failed :(");
     sx127x.set_pa_boost(20).await.expect("set_amplifier_boost failed :(");
     sx127x.set_dio0(Dio0Signal::TxDone).await.expect("set_dio0 failed :(");
 
     loop {
         match select(ENV_READING_READY.wait(), TX_DONE.wait()).await {
             Either::First(env_reading) => {
-                lora_tx(&mut sx127x, env_reading.into(), 3).await
+                let payload: LoraBuffer = env_reading.into();
+                match sx127x.transmit(&payload).await {
+                    Ok(_) => sender.send(LoraTxStarted).await,
+                    Err(_) => sender.send(LoraTxDoneInterruptClearedErr).await,
+                }
             },
             Either::Second(_) => {
-                info!("clearing dio0");
-                sx127x.clear_interrupt(Interrupt::TxDone).await.expect("clear interrupt TxDone failed :(");
-            }
-        }
-    }
-}
-
-async fn lora_tx(
-    sx127x: &mut Sx127xLora<SpiDevice<'_, NoopRawMutex, Spi<'_, SPI1, Async>, Output<'_>>>,
-    buffer: LoraBuffer,
-    retries: u8
-) {
-    let sender = EVENT_CHANNEL.sender();
-
-    for _ in 1..=retries {
-        match sx127x.transmit(&buffer).await {
-            Ok(_) => return,
-            Err(e) => {
-                match e {
-                    // TODO need better way to handle this...
-                    Sx127xError::InvalidFdev => error!("Sx127xError::InvalidFdev"),
-                    Sx127xError::InvalidInput => error!("Sx127xError::InvalidInput"),
-                    Sx127xError::InvalidPayloadLength => error!("Sx127xError::InvalidPayloadLength"),
-                    Sx127xError::InvalidPreambleLength => error!("Sx127xError::InvalidPreambleLength"),
-                    Sx127xError::InvalidState => error!("Sx127xError::InvalidState"),
-                    Sx127xError::InvalidSymbolTimeout => error!("Sx127xError::InvalidSymbolTimeout"),
-                    Sx127xError::PacketTermination => error!("Sx127xError::PacketTermination"),
-                    Sx127xError::SPI(_) => error!("Sx127xError::SPI"),
+                //info!("TX_DONE received");
+                match sx127x.clear_interrupt(Interrupt::TxDone).await {
+                    Ok(_) => sender.send(LoraTxDoneInterruptCleared).await,
+                    Err(_) => sender.send(LoraTxDoneInterruptClearedErr).await,
                 }
-                Timer::after_millis(1_000).await;
             }
         }
     }
-    sender.send(LoraTxNoRetriesLeft).await;
-
 }
 
 // TODO i think this can go into lora_task
@@ -153,14 +106,13 @@ async fn lora_tx_done_task(mut dio0: Input<'static>) {
 }
 
 #[embassy_executor::task]
-async fn orchestrator_task(_spawner: Spawner, rtc: &'static Rtc) {
+async fn orchestrator_task(rtc: &'static Rtc) {
     let receiver = EVENT_CHANNEL.receiver();
     loop {
         let event = receiver.receive().await;
         match event {
             PressureRead(mpr_reading) => {
                 let mut rtc = rtc.lock().await;
-                info!("timestamp: {}", rtc.now().await.unwrap().timestamp());
                 ENV_READING_READY.signal(
                     EnvReading::new(
                         mpr_reading.psi() as u8,
@@ -168,9 +120,12 @@ async fn orchestrator_task(_spawner: Spawner, rtc: &'static Rtc) {
                     )
                 )
             },
+            PressureReadErr => error!("pressure sensor read err :("),
             LoraTxDone => TX_DONE.signal(()),
-            LoraTxNoRetriesLeft => error!("lora tx failed :("),
-            RtcSecondAlarm => info!("RTC second alarm"),
+            LoraTxDoneInterruptCleared => info!("lora tx done interrupt cleared"),
+            LoraTxDoneInterruptClearedErr => error!("lora tx done interrupt cleared err :("),
+            LoraTxStarted => info!("lora tx started"),
+            RtcAlarm => RTC_ALARM.signal(()),
         }
     }
 }
@@ -186,34 +141,32 @@ async fn pressure_sensor_task(i2c_bus: &'static I2c0Bus) {
         error!("MPR error: exit_standby() failed :(")
     }
     Timer::after(Duration::from_millis(10)).await;
-    match sensor.read().await {
-        Ok(reading) => sender.send(Event::PressureRead(reading)).await,
-        Err(_) => error!("MPR error: read() failed :("),
+
+    loop {
+        RTC_ALARM.wait().await;
+        match sensor.read().await {
+            Ok(reading) => sender.send(PressureRead(reading)).await,
+            Err(_) => sender.send(PressureReadErr).await,
+        }
     }
 }
 
-// #[embassy_executor::task]
-// async fn rtc_task(i2c_bus: &'static I2c0Bus, mut int1_pin: Input<'static>) {
-//     let sender = EVENT_CHANNEL.sender();
-//     let i2c_dev = I2cDevice::new(i2c_bus);
-//     let mut pcf8523 = Pcf8523::new(i2c_dev, Pcf8523T {}).await.unwrap();
-//     pcf8523.start_second_timer(Pulsed).await.unwrap();
-//
-//     loop {
-//         // TODO use another alarm
-//         int1_pin.wait_for_falling_edge().await;
-//         sender.send(RtcSecondAlarm).await;
-//     }
-// }
-
 #[embassy_executor::task]
-async fn rtc_alarm_task(mut int1_pin: Input<'static>) {
+async fn rtc_alarm_task(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
     let sender = EVENT_CHANNEL.sender();
+    let cfg = TimerA::new(255, Pulsed, Countdown, TimerSourceClock::Frequency64Hz);
+    {
+        let mut rtc = rtc.lock().await;
+        rtc.start_timer_a(&cfg).await.unwrap();
+    }
 
     loop {
-        // TODO use another alarm
         int1_pin.wait_for_falling_edge().await;
-        sender.send(RtcSecondAlarm).await;
+        {
+            let mut rtc = rtc.lock().await;
+            rtc.clear_timer_a_interrupt(&cfg).await.unwrap();
+        }
+        sender.send(RtcAlarm).await;
     }
 }
 
@@ -239,33 +192,13 @@ async fn main(spawner: Spawner) {
     let i2c_bus = I2C0_BUS.init(Mutex::new(i2c));
 
     // rtc
-    //let sender = EVENT_CHANNEL.sender();
-    //let i2c_dev = I2cDevice::new(i2c_bus);
-    let mut pcf8523 = Pcf8523::new(I2cDevice::new(i2c_bus), Pcf8523T {}).await.unwrap();
-    pcf8523.start_second_timer(Pulsed).await.unwrap();
-//    static SHARED_RTC: StaticCell<Pcf8523<I2cDevice<NoopRawMutex, I2c<I2C0, embassy_rp::i2c::Async>>, Pcf8523T>> = StaticCell::new();
+    let pcf8523 = Pcf8523::new(I2cDevice::new(i2c_bus), Pcf8523T {}).await.unwrap();
     static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
-    // uart
-    //let uart_rx = UartRx::new(p.UART0, p.PIN_1, Irqs, p.DMA_CH2, embassy_rp::uart::Config::default());
-
-    spawner.spawn(orchestrator_task(spawner, shared_rtc).unwrap());
-
-    spawner.spawn(rtc_alarm_task(Input::new(p.PIN_8, Pull::Up)).unwrap());
+    spawner.spawn(orchestrator_task(shared_rtc).unwrap());
+    spawner.spawn(rtc_alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
+    spawner.spawn(pressure_sensor_task(i2c_bus).unwrap());
     spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High)).unwrap());
     spawner.spawn(lora_tx_done_task(Input::new(p.PIN_15, Pull::Down)).unwrap());
-
-    // spawner.spawn(led_task(Output::new(p.PIN_20, Level::Low)).unwrap());
-
-    // TODO could set system state in a single place instead of multiple #[cfg(debug_assertions)] s
-    //#[cfg(debug_assertions)]
-    //spawner.spawn(uart_rx_task(uart_rx).unwrap());
-
-    // this is effectively the main task
-    loop {
-        spawner.spawn(pressure_sensor_task(i2c_bus).unwrap());
-        // TODO use rtc alarm for this
-        Timer::after_secs(5).await;
-    }
 }
