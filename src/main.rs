@@ -59,15 +59,21 @@ static EVENT_CHANNEL: Channel<ThreadModeRawMutex, Event, 10> = Channel::new();
 async fn env_reading_task(i2c_bus: &'static I2c0Bus, rtc: &'static Rtc) {
     loop {
         RTC_ALARM.wait().await;
-        let (aq_res, pressure_res) = join(read_aq_sensor(i2c_bus), read_pressure_sensor(i2c_bus)).await;
+        debug!("received RTC_ALARM");
+        // let (aq_res, pressure_res) = join(read_aq_sensor(i2c_bus), read_pressure_sensor(i2c_bus)).await;
+        let now = rtc_now(rtc).await;
+        debug!("now: {:?}", now);
+        let mut builder = EnvReadingBuilder::new(now);
 
-        let mut rtc = rtc.lock().await;
-        let mut builder = EnvReadingBuilder::new(rtc.now().await.unwrap().timestamp());
-
+        let pressure_res = read_pressure_sensor(i2c_bus).await;
         if let Some(pressure) = pressure_res {
             builder.pressure_psi(pressure.psi() as u8);
         }
-
+        // if let Some(aq) = aq_res {
+        //     info!("aq: {}", aq);
+        // }
+        //
+        debug!("signalling ENV_READING_READY");
         ENV_READING_READY.signal(builder.build())
     }
 }
@@ -97,6 +103,11 @@ async fn read_pressure_sensor(i2c_bus: &'static I2c0Bus) -> Option<honeywell_mpr
             Err(_) => None
         }
     }
+}
+
+async fn rtc_now(rtc: &'static Rtc) -> u32 {
+    let mut rtc = rtc.lock().await;
+    rtc.now().await.unwrap().timestamp()
 }
 
 #[embassy_executor::task]
@@ -135,13 +146,16 @@ async fn orchestrator_task() {
     loop {
         let event = receiver.receive().await;
         match event {
-            PressureSensorRead(_) => {},
+            PressureSensorRead(_) => debug!("pressure sensor read"),
             PressureSensorReadErr => error!("pressure sensor read err :("),
             LoraTxDoneInterruptCleared => debug!("lora tx done interrupt cleared"),
             LoraTxDoneInterruptClearedErr => error!("lora tx done interrupt cleared err :("),
             LoraTxStarted => debug!("lora tx started"),
             // if RTC signals directly to env reading task, can get rid of orchestrator?
-            RtcAlarmTriggered => RTC_ALARM.signal(()),
+            RtcAlarmTriggered => {
+                debug!("rtc alarm triggered");
+                RTC_ALARM.signal(())
+            },
         }
     }
 }

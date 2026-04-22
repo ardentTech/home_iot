@@ -26,3 +26,4 @@ This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core 
 - [ ] add sdcard
 - [x] system diagram(s)
 - [x] more sensors
+- [ ] debug command and response over UART
