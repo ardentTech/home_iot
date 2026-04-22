@@ -140,31 +140,11 @@ async fn orchestrator_task() {
             LoraTxDoneInterruptCleared => debug!("lora tx done interrupt cleared"),
             LoraTxDoneInterruptClearedErr => error!("lora tx done interrupt cleared err :("),
             LoraTxStarted => debug!("lora tx started"),
+            // if RTC signals directly to env reading task, can get rid of orchestrator?
             RtcAlarmTriggered => RTC_ALARM.signal(()),
         }
     }
 }
-
-// #[embassy_executor::task]
-// async fn pressure_sensor_task(i2c_bus: &'static I2c0Bus) {
-//     let i2c_dev = I2cDevice::new(i2c_bus);
-//     let config = MprConfig::new(0, 25, TransferFunction::C);
-//     let mut sensor = Mpr::new_i2c(i2c_dev, 0x18, config).unwrap();
-//     let sender = EVENT_CHANNEL.sender();
-//
-//     if sensor.exit_standby().await.is_err() {
-//         error!("MPR error: exit_standby() failed :(")
-//     }
-//     Timer::after(Duration::from_millis(10)).await;
-//
-//     loop {
-//         RTC_ALARM.wait().await;
-//         match sensor.read().await {
-//             Ok(reading) => sender.send(PressureSensorRead(reading)).await,
-//             Err(_) => sender.send(PressureSensorReadErr).await,
-//         }
-//     }
-// }
 
 #[embassy_executor::task]
 async fn rtc_alarm_task(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
