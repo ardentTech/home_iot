@@ -11,13 +11,12 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 #[allow(unused_imports)]
 use {defmt_rtt as _, panic_probe as _};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
-use embassy_embedded_hal::shared_bus::I2cDeviceError;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_futures::select::{select, Either};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
-use embassy_rp::i2c::{Config, Error, I2c, InterruptHandler};
+use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, I2C0};
 use embassy_rp::peripherals::SPI1;
 use embassy_rp::spi::{Async, Spi};
@@ -26,7 +25,7 @@ use embassy_sync::channel::{Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
-use honeywell_mpr::{Mpr, MprConfig, MprI2cError, TransferFunction};
+use honeywell_mpr::{Mpr, MprConfig, TransferFunction};
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::{Pcf8523T, TimerA, TimerSourceClock};
 use nxp_pcf8523::typedefs::TimerInterruptMode::Pulsed;
@@ -35,7 +34,7 @@ use pmsa003i::Pmsa003i;
 use static_cell::StaticCell;
 use sx127x_lora::driver::{Sx127xLora, Sx127xLoraConfig};
 use sx127x_lora::types::{Dio0Signal, Interrupt};
-use crate::env_reading::{EnvReading, EnvReadingBuilder};
+use crate::env_reading::EnvReading;
 use crate::event::Event;
 use crate::event::Event::*;
 use crate::types::LoraBuffer;
@@ -61,30 +60,18 @@ async fn env_reading_task(i2c_bus: &'static I2c0Bus, rtc: &'static Rtc) {
         RTC_ALARM.wait().await;
         let (aq_res, pressure_res) = join(read_aq_sensor(i2c_bus), read_pressure_sensor(i2c_bus)).await;
         let now = rtc_now(rtc).await;
-        let mut builder = EnvReadingBuilder::new(now);
+        let mut builder = EnvReading::builder(now);
 
         if let Some(aq) = aq_res {
-            debug!("received aq: {:?}", aq);
+            builder.pm1(aq.pm1);
+            builder.pm2_5(aq.pm2_5);
+            builder.pm10(aq.pm10);
         }
 
         if let Some(pressure) = pressure_res {
-            builder.pressure_psi(pressure.psi() as u8);
+            builder.air_pressure(pressure.psi() as u8);
         }
         ENV_READING_READY.signal(builder.build())
-    }
-}
-
-#[embassy_executor::task]
-async fn aq_sensor_task(i2c_bus: &'static I2c0Bus) {
-    let i2c_dev = I2cDevice::new(i2c_bus);
-    let mut aq_sensor = Pmsa003i::new(i2c_dev);
-
-    loop {
-        match aq_sensor.read().await {
-            Ok(reading) => info!("reading: {:?}", reading),
-            Err(_) => error!("Error reading from AQ sensor"),
-        }
-        Timer::after_secs(3).await;
     }
 }
 
@@ -134,6 +121,7 @@ async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>, mut dio0: Inp
     loop {
         match select(ENV_READING_READY.wait(), dio0.wait_for_high()).await {
             Either::First(env_reading) => {
+                debug!("env_reading: {:?}", env_reading);
                 let payload: LoraBuffer = env_reading.into();
                 match sx127x.transmit(&payload).await {
                     Ok(_) => sender.send(LoraTxStarted).await,
@@ -215,7 +203,6 @@ async fn main(spawner: Spawner) {
     static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
-    //spawner.spawn(aq_sensor_task(i2c_bus).unwrap());
     spawner.spawn(orchestrator_task().unwrap());
     spawner.spawn(rtc_alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());

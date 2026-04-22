@@ -4,25 +4,46 @@ use packed_struct::PackedStruct;
 use crate::types::LoraBuffer;
 
 #[derive(Default)]
-pub struct EnvReadingBuilder {
-    pressure_psi: Option<u8>,
+pub(crate) struct EnvReadingBuilder {
+    air_pressure: Option<u8>,
+    pm1: Option<u16>,
+    pm2_5: Option<u16>,
+    pm10: Option<u16>,
     timestamp: u32
 }
 impl EnvReadingBuilder {
-    pub fn new(timestamp: u32) -> Self {
+    fn new(timestamp: u32) -> Self {
         Self {
-            pressure_psi: None,
+            air_pressure: None,
+            pm1: None,
+            pm2_5: None,
+            pm10: None,
             timestamp
         }
     }
 
-    pub fn pressure_psi(&mut self, psi: u8){
-        self.pressure_psi = Some(psi);
+    pub fn air_pressure(&mut self, psi: u8) {
+        self.air_pressure = Some(psi);
+    }
+
+    pub fn pm1(&mut self, pm: u16) {
+        self.pm1 = Some(pm);
+    }
+
+    pub fn pm2_5(&mut self, pm: u16) {
+        self.pm2_5 = Some(pm);
+    }
+
+    pub fn pm10(&mut self, pm: u16) {
+        self.pm10 = Some(pm);
     }
 
     pub fn build(self) -> EnvReading {
         EnvReading {
-            pressure_psi: self.pressure_psi.unwrap_or(255),
+            air_pressure: self.air_pressure.unwrap_or(255),
+            pm1: self.pm1.unwrap_or(65535),
+            pm2_5: self.pm2_5.unwrap_or(65535),
+            pm10: self.pm10.unwrap_or(65535),
             timestamp: self.timestamp
         }
     }
@@ -30,26 +51,29 @@ impl EnvReadingBuilder {
 
 #[derive(PackedStruct, Clone, Copy, Debug)]
 #[packed_struct(endian = "lsb")]
-pub(crate) struct EnvReading {
-    pub(crate) pressure_psi: u8, // TODO should be able to pack this into... 5 bits?
-    pub(crate) timestamp: u32
+pub(crate) struct EnvReading { // TODO explore bit packing opportunities
+    air_pressure: u8,
+    pm1: u16,
+    pm2_5: u16,
+    pm10: u16,
+    timestamp: u32
 }
 
 impl EnvReading {
-    pub(crate) fn builder() -> EnvReadingBuilder {
-        EnvReadingBuilder::default()
+    pub(crate) fn builder(timestamp: u32) -> EnvReadingBuilder {
+        EnvReadingBuilder::new(timestamp)
     }
 }
 
 impl Format for EnvReading {
     fn format(&self, fmt: Formatter) {
-        write!(fmt, "{}psi", self.pressure_psi);
+        write!(fmt, "air pressure: {}psi, pm1: {}, pm2.5: {}, pm10: {}", self.air_pressure, self.pm1, self.pm2_5, self.pm10);
     }
 }
 
 impl Into<LoraBuffer> for EnvReading {
     fn into(self) -> LoraBuffer {
-        let payload: [u8; 5] = self.pack().unwrap();
+        let payload: [u8; 11] = self.pack().unwrap();
         let mut buffer = [0; 128];
         for (i, b) in payload.iter().enumerate() {
             buffer[i] = *b;
