@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-mod command;
 mod event;
 mod env_reading;
 mod types;
