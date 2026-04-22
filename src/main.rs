@@ -59,22 +59,32 @@ static EVENT_CHANNEL: Channel<ThreadModeRawMutex, Event, 10> = Channel::new();
 async fn env_reading_task(i2c_bus: &'static I2c0Bus, rtc: &'static Rtc) {
     loop {
         RTC_ALARM.wait().await;
-        debug!("received RTC_ALARM");
-        // let (aq_res, pressure_res) = join(read_aq_sensor(i2c_bus), read_pressure_sensor(i2c_bus)).await;
+        let (aq_res, pressure_res) = join(read_aq_sensor(i2c_bus), read_pressure_sensor(i2c_bus)).await;
         let now = rtc_now(rtc).await;
-        debug!("now: {:?}", now);
         let mut builder = EnvReadingBuilder::new(now);
 
-        let pressure_res = read_pressure_sensor(i2c_bus).await;
+        if let Some(aq) = aq_res {
+            debug!("received aq: {:?}", aq);
+        }
+
         if let Some(pressure) = pressure_res {
             builder.pressure_psi(pressure.psi() as u8);
         }
-        // if let Some(aq) = aq_res {
-        //     info!("aq: {}", aq);
-        // }
-        //
-        debug!("signalling ENV_READING_READY");
         ENV_READING_READY.signal(builder.build())
+    }
+}
+
+#[embassy_executor::task]
+async fn aq_sensor_task(i2c_bus: &'static I2c0Bus) {
+    let i2c_dev = I2cDevice::new(i2c_bus);
+    let mut aq_sensor = Pmsa003i::new(i2c_dev);
+
+    loop {
+        match aq_sensor.read().await {
+            Ok(reading) => info!("reading: {:?}", reading),
+            Err(_) => error!("Error reading from AQ sensor"),
+        }
+        Timer::after_secs(3).await;
     }
 }
 
@@ -195,7 +205,7 @@ async fn main(spawner: Spawner) {
     let sda = p.PIN_16;
     let scl = p.PIN_17;
     let mut config = Config::default();
-    config.frequency = 400_000;
+    config.frequency = 100_000; // this is the only I2C bus speed that works with rtc, pressure and aq peripherals
     let i2c = I2c::new_async(p.I2C0, scl, sda, Irqs, config);
     static I2C0_BUS: StaticCell<I2c0Bus> = StaticCell::new();
     let i2c_bus = I2C0_BUS.init(Mutex::new(i2c));
@@ -205,6 +215,7 @@ async fn main(spawner: Spawner) {
     static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
+    //spawner.spawn(aq_sensor_task(i2c_bus).unwrap());
     spawner.spawn(orchestrator_task().unwrap());
     spawner.spawn(rtc_alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
