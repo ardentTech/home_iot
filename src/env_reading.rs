@@ -3,24 +3,47 @@ use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 use crate::types::LoraBuffer;
 
+#[derive(Default)]
+pub struct EnvReadingBuilder {
+    pressure_psi: Option<u8>,
+    timestamp: u32
+}
+impl EnvReadingBuilder {
+    pub fn new(timestamp: u32) -> Self {
+        Self {
+            pressure_psi: None,
+            timestamp
+        }
+    }
+
+    pub fn pressure_psi(&mut self, psi: u8){
+        self.pressure_psi = Some(psi);
+    }
+
+    pub fn build(self) -> EnvReading {
+        EnvReading {
+            pressure_psi: self.pressure_psi.unwrap_or(255),
+            timestamp: self.timestamp
+        }
+    }
+}
+
 #[derive(PackedStruct, Clone, Copy, Debug)]
 #[packed_struct(endian = "lsb")]
 pub(crate) struct EnvReading {
-    #[packed_field()]
-    psi: u8, // TODO should be able to pack this into... 5 bits?
-    timestamp: u32
+    pub(crate) pressure_psi: u8, // TODO should be able to pack this into... 5 bits?
+    pub(crate) timestamp: u32
 }
 
-// TODO timestamp
 impl EnvReading {
-    pub(crate) fn new(psi: u8, timestamp: u32) -> Self {
-        Self { psi, timestamp }
+    pub(crate) fn builder() -> EnvReadingBuilder {
+        EnvReadingBuilder::default()
     }
 }
 
 impl Format for EnvReading {
     fn format(&self, fmt: Formatter) {
-        write!(fmt, "{}psi", self.psi);
+        write!(fmt, "{}psi", self.pressure_psi);
     }
 }
 
