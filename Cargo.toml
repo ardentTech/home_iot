@@ -19,7 +19,7 @@ packed_struct = { version = "0.10.1", default-features = false }
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 pmsa003i = { version = "0.1.11", features = ["async", "defmt"] }
 static_cell = "2.1.1"
-sx127x-lora = { git = "https://github.com/ardentTech/sx127x-lora.git", rev = "55300d3" }
+sx127xlora = "0.1.0"
 
 [[bin]]
 name = "home_iot"

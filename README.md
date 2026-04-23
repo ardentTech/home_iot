@@ -21,9 +21,11 @@ This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core 
 
 ### TODO
 
-- [ ] initialize nxp-pcf8523 datetime at compile time?
+- [ ] initialize nxp-pcf8523 datetime at compile time
 - [ ] disable rp235x rtc
 - [ ] add sdcard
 - [x] system diagram(s)
-- [x] more sensors
+- [x] pressure sensor
+- [x] air quality sensor
 - [ ] debug command and response over UART
+- [ ] dormant + wake
