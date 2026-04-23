@@ -17,12 +17,11 @@ This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core 
 * [honeywell-mpr](https://github.com/ardentTech/honeywell-mpr)
 * [nxp-pcf8523](https://github.com/ardentTech/nxp-pcf8523)
 
-![Organigram](/assets/organigram.png)
+![Architecture](/assets/software_arch.png)
 
 ### TODO
 
-- [ ] initialize nxp-pcf8523 datetime at compile time
-- [ ] disable rp235x rtc
+- [ ] replace nxp-pcf8523 with AOT
 - [ ] add sdcard
 - [x] system diagram(s)
 - [x] pressure sensor

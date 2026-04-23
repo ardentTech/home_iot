@@ -17,7 +17,7 @@ use embassy_futures::select::{select, Either};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::i2c::{Config, I2c, InterruptHandler};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, I2C0};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, I2C0};
 use embassy_rp::peripherals::SPI1;
 use embassy_rp::spi::{Async, Spi};
 use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
@@ -46,7 +46,7 @@ type Rtc = Mutex<NoopRawMutex, Pcf8523<I2cDevice<'static, NoopRawMutex, I2c<'sta
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 
 bind_interrupts!(struct Irqs {
-    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>, embassy_rp::dma::InterruptHandler<DMA_CH2>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>;
     I2C0_IRQ => InterruptHandler<I2C0>;
 });
 
@@ -75,7 +75,7 @@ async fn env_reading_task(i2c_bus: &'static I2c0Bus, rtc: &'static Rtc) {
     }
 }
 
-async fn read_aq_sensor(i2c_bus: &'static I2c0Bus) -> Option<pmsa003i::Reading>{
+async fn read_aq_sensor(i2c_bus: &'static I2c0Bus) -> Option<pmsa003i::Reading> {
     let i2c_dev = I2cDevice::new(i2c_bus);
     let mut aq_sensor = Pmsa003i::new(i2c_dev);
 
@@ -159,7 +159,7 @@ async fn orchestrator_task() {
 }
 
 #[embassy_executor::task]
-async fn rtc_alarm_task(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
+async fn alarm_task(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
     let sender = EVENT_CHANNEL.sender();
     let cfg = TimerA::new(255, Pulsed, Countdown, TimerSourceClock::Frequency64Hz);
     {
@@ -204,7 +204,7 @@ async fn main(spawner: Spawner) {
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
     spawner.spawn(orchestrator_task().unwrap());
-    spawner.spawn(rtc_alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
+    spawner.spawn(alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
     spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
 }
