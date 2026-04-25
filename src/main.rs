@@ -125,7 +125,7 @@ async fn lora_task(spi_bus: &'static Spi1Bus, cs: Output<'static>, mut dio0: Inp
                 let payload: LoraBuffer = env_reading.into();
                 match sx127x.transmit(&payload).await {
                     Ok(_) => sender.send(LoraTxStarted).await,
-                    Err(_) => sender.send(LoraTxDoneInterruptClearedErr).await,
+                    Err(_) => sender.send(LoraTxStartedErr).await,
                 }
             },
             Either::Second(_) => {
@@ -149,7 +149,7 @@ async fn orchestrator_task() {
             LoraTxDoneInterruptCleared => debug!("lora tx done interrupt cleared"),
             LoraTxDoneInterruptClearedErr => error!("lora tx done interrupt cleared err :("),
             LoraTxStarted => debug!("lora tx started"),
-            // if RTC signals directly to env reading task, can get rid of orchestrator?
+            LoraTxStartedErr => error!("lora tx started err :("),
             RtcAlarmTriggered => {
                 debug!("rtc alarm triggered");
                 RTC_ALARM.signal(())
@@ -174,6 +174,14 @@ async fn alarm_task(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
             rtc.clear_timer_a_interrupt(&cfg).await.unwrap();
         }
         sender.send(RtcAlarmTriggered).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn led_blink(mut pin: Output<'static>) {
+    loop {
+        pin.toggle();
+        Timer::after_secs(3).await;
     }
 }
 
@@ -207,4 +215,5 @@ async fn main(spawner: Spawner) {
     spawner.spawn(alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
     spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
+    spawner.spawn(led_blink(Output::new(p.PIN_20, Level::Low)).unwrap());
 }

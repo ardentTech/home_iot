@@ -4,5 +4,6 @@ pub(crate) enum Event {
     LoraTxDoneInterruptCleared,
     LoraTxDoneInterruptClearedErr,
     LoraTxStarted,
+    LoraTxStartedErr,
     RtcAlarmTriggered,
 }
