@@ -14,12 +14,13 @@ use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_futures::select::{select, Either};
-use embassy_rp::bind_interrupts;
+use embassy_rp::{bind_interrupts, uart};
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::i2c::{Config, I2c, InterruptHandler};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, I2C0};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, I2C0, UART1};
 use embassy_rp::peripherals::SPI1;
 use embassy_rp::spi::{Async, Spi};
+use embassy_rp::uart::{Error, UartRx, UartTx};
 use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel::{Channel};
 use embassy_sync::mutex::Mutex;
@@ -46,8 +47,9 @@ type Rtc = Mutex<NoopRawMutex, Pcf8523<I2cDevice<'static, NoopRawMutex, I2c<'sta
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 
 bind_interrupts!(struct Irqs {
-    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>, embassy_rp::dma::InterruptHandler<DMA_CH2>, embassy_rp::dma::InterruptHandler<DMA_CH3>;
     I2C0_IRQ => InterruptHandler<I2C0>;
+    UART1_IRQ => uart::InterruptHandler<UART1>;
 });
 
 static ENV_READING_READY: Signal<ThreadModeRawMutex, EnvReading> = Signal::new();
@@ -211,9 +213,28 @@ async fn main(spawner: Spawner) {
     static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
-    spawner.spawn(orchestrator_task().unwrap());
-    spawner.spawn(alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
-    spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
-    spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
+    // spawner.spawn(orchestrator_task().unwrap());
+    // spawner.spawn(alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
+    // spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
+    // spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
     spawner.spawn(led_blink(Output::new(p.PIN_20, Level::Low)).unwrap());
+
+    //let mut uart_tx = UartTx::new(p.UART0, p.PIN_0, p.DMA_CH2, Irqs, uart::Config::default());
+    let uart_rx = UartRx::new(p.UART1, p.PIN_5, Irqs, p.DMA_CH3, uart::Config::default());
+    spawner.spawn(unwrap!(reader(uart_rx)));
+}
+
+#[embassy_executor::task]
+async fn reader(mut rx: UartRx<'static, uart::Async>) {
+    info!("Reading...");
+    loop {
+        info!("loop head");
+        // read a total of 4 transmissions (32 / 8) and then print the result
+        let mut buf = [0; 1];
+        match rx.read(&mut buf).await {
+            Ok(_) => info!("RX: {}", buf),
+            Err(e) => error!("UART read error: {}", e),
+        }
+        info!("loop tail");
+    }
 }
