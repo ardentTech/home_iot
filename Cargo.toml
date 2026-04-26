@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-circular-buffer = { version = "1.2.0", default-features = false }
 cortex-m-rt = "0.7.0"
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"

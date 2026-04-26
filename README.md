@@ -6,12 +6,12 @@ Firmware for a remote device that reads sensor data and then transmits payloads 
 - [RP Pico 2W](https://www.adafruit.com/product/6087)
 - [Semtech sx127x](https://www.adafruit.com/product/3072)
 - [Honeywell MPR](https://www.adafruit.com/product/3965)
-- [Adalogger Featherwing](https://www.adafruit.com/product/2922)
-- [Pico Debug Probe](https://www.adafruit.com/product/5699)
+- [NXP PCF8523T](https://www.nxp.com/part/PCF8523T)
+- [Pico Debug Probe](https://www.adafruit.com/product/5699) (optional but helpful)
 
 ### Software
 
-This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core and leverages three device drivers that I authored and maintain:
+This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core(s) of the RP2350 and leverages three device drivers that I authored and maintain:
 
 * [sx127x-lora](https://github.com/ardentTech/sx127x-lora)
 * [honeywell-mpr](https://github.com/ardentTech/honeywell-mpr)
@@ -21,10 +21,10 @@ This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core 
 
 ### TODO
 
-- [ ] replace nxp-pcf8523 with AOT
-- [ ] add sdcard
+- [ ] add sdcard for logging
+- [ ] expand command response system
 - [x] system diagram(s)
 - [x] pressure sensor
 - [x] air quality sensor
-- [ ] debug command and response over UART
+- [x] command and response over UART
 - [ ] dormant + wake

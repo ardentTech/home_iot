@@ -1,12 +1,12 @@
 use crate::command::CMD_SIZE;
+use crate::env_reading::EnvReading;
 
 pub(crate) enum Event {
-    RawCmdEntered([u8; CMD_SIZE]),
-    PressureSensorRead(honeywell_mpr::Reading),
-    PressureSensorReadErr,
+    EnvReadingTaken(EnvReading),
     LoraTxDoneInterruptCleared,
     LoraTxDoneInterruptClearedErr,
     LoraTxStarted,
     LoraTxStartedErr,
+    RawCmdEntered([u8; CMD_SIZE]),
     RtcAlarmTriggered,
 }
