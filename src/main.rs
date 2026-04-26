@@ -4,7 +4,9 @@
 mod event;
 mod env_reading;
 mod types;
+mod command;
 
+use circular_buffer::CircularBuffer;
 #[allow(unused_imports)]
 use defmt::*;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
@@ -20,12 +22,13 @@ use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, I2C0, UART1};
 use embassy_rp::peripherals::SPI1;
 use embassy_rp::spi::{Async, Spi};
-use embassy_rp::uart::{Error, UartRx, UartTx};
+use embassy_rp::uart::{BufferedUart, BufferedUartRx, BufferedUartTx, Error, UartRx, UartTx};
 use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel::{Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
+use embedded_io_async::{Read, ReadExactError, Write};
 use honeywell_mpr::{Mpr, MprConfig, TransferFunction};
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::{Pcf8523T, TimerA, TimerSourceClock};
@@ -35,6 +38,7 @@ use pmsa003i::Pmsa003i;
 use static_cell::StaticCell;
 use sx127xlora::driver::{Sx127xLora, Sx127xLoraConfig};
 use sx127xlora::types::{Dio0Signal, Interrupt};
+use crate::command::{Command, CMD_SIZE};
 use crate::env_reading::EnvReading;
 use crate::event::Event;
 use crate::event::Event::*;
@@ -49,12 +53,14 @@ const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 bind_interrupts!(struct Irqs {
     DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>, embassy_rp::dma::InterruptHandler<DMA_CH2>, embassy_rp::dma::InterruptHandler<DMA_CH3>;
     I2C0_IRQ => InterruptHandler<I2C0>;
-    UART1_IRQ => uart::InterruptHandler<UART1>;
+    UART1_IRQ => uart::BufferedInterruptHandler<UART1>;
 });
 
 static ENV_READING_READY: Signal<ThreadModeRawMutex, EnvReading> = Signal::new();
 static RTC_ALARM: Signal<ThreadModeRawMutex, ()> = Signal::new();
 static EVENT_CHANNEL: Channel<ThreadModeRawMutex, Event, 10> = Channel::new();
+static UART_TX: Signal<ThreadModeRawMutex, usize> = Signal::new();
+static UART_TX_BUFFER: CircularBuffer<16, u8> = CircularBuffer::new();
 
 #[embassy_executor::task]
 async fn env_reading_task(i2c_bus: &'static I2c0Bus, rtc: &'static Rtc) {
@@ -146,6 +152,12 @@ async fn orchestrator_task() {
     loop {
         let event = receiver.receive().await;
         match event {
+            RawCmdEntered(raw) => {
+                match Command::try_from(raw) {
+                    Ok(cmd) => info!("Command: {:?}", cmd),
+                    Err(_) => error!("Invalid command: {:?}", raw),
+                }
+            },
             PressureSensorRead(_) => debug!("pressure sensor read"),
             PressureSensorReadErr => error!("pressure sensor read err :("),
             LoraTxDoneInterruptCleared => debug!("lora tx done interrupt cleared"),
@@ -213,28 +225,60 @@ async fn main(spawner: Spawner) {
     static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
-    // spawner.spawn(orchestrator_task().unwrap());
+    spawner.spawn(orchestrator_task().unwrap());
     // spawner.spawn(alarm_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     // spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
     // spawner.spawn(lora_task(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
-    spawner.spawn(led_blink(Output::new(p.PIN_20, Level::Low)).unwrap());
+    //spawner.spawn(led_blink(Output::new(p.PIN_20, Level::Low)).unwrap());
 
-    //let mut uart_tx = UartTx::new(p.UART0, p.PIN_0, p.DMA_CH2, Irqs, uart::Config::default());
-    let uart_rx = UartRx::new(p.UART1, p.PIN_5, Irqs, p.DMA_CH3, uart::Config::default());
-    spawner.spawn(unwrap!(reader(uart_rx)));
+    let (tx_pin, rx_pin, uart) = (p.PIN_4, p.PIN_5, p.UART1);
+    static TX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
+    let tx_buf = &mut TX_BUF.init([0; 16])[..];
+    static RX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
+    let rx_buf = &mut RX_BUF.init([0; 16])[..];
+    let uart = BufferedUart::new(uart, tx_pin, rx_pin, Irqs, tx_buf, rx_buf, uart::Config::default());
+    let (tx, rx) = uart.split();
+
+    spawner.spawn((uart_rx(rx)).unwrap());
+    spawner.spawn((uart_tx(tx)).unwrap());
 }
 
 #[embassy_executor::task]
-async fn reader(mut rx: UartRx<'static, uart::Async>) {
-    info!("Reading...");
+async fn uart_rx(mut rx: BufferedUartRx) {
+    let mut cmd_buf = [0u8; CMD_SIZE];
+    let mut pointer: usize = 0;
+    let sender = EVENT_CHANNEL.sender();
+
+    // TODO uart tx msg (e.g. "ready for cmds")
     loop {
-        info!("loop head");
-        // read a total of 4 transmissions (32 / 8) and then print the result
         let mut buf = [0; 1];
-        match rx.read(&mut buf).await {
-            Ok(_) => info!("RX: {}", buf),
-            Err(e) => error!("UART read error: {}", e),
+        match rx.read_exact(&mut buf).await {
+            Ok(_) => {
+                if buf[0] == 13 {
+                    sender.send(RawCmdEntered(cmd_buf)).await;
+                    cmd_buf = [0u8; CMD_SIZE];
+                    pointer = 0;
+                } else {
+                    if pointer > CMD_SIZE - 1 {
+                        // TODO uart tx error msg
+                        error!("cmd too long!");
+                        cmd_buf = [0u8; CMD_SIZE];
+                        pointer = 0;
+                    } else {
+                        cmd_buf[pointer] = buf[0];
+                        pointer += 1;
+                    }
+                }
+            }
+            Err(_) => {}
         }
-        info!("loop tail");
+    }
+}
+
+#[embassy_executor::task]
+async fn uart_tx(mut tx: BufferedUartTx) {
+    loop {
+        UART_TX.wait().await;
+        tx.write_all("howdy\r\n".as_bytes()).await.unwrap();
     }
 }
