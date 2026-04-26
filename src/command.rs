@@ -11,6 +11,7 @@ pub(crate) enum Command {
 impl TryFrom<[u8; CMD_SIZE]> for Command {
     type Error = ();
 
+    // TODO parse str instead of byte array
     fn try_from(value: [u8; CMD_SIZE]) -> Result<Self, Self::Error> {
         match value {
             [108, 101, 100] | [76, 69, 68] => Ok(BlinkLed),
