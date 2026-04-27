@@ -1,6 +1,6 @@
 # Home IOT
 
-Firmware for a remote device that reads sensor data and then transmits payloads via LoRa.
+Rust `#![no_std]` firmware for a remote device that reads from various sensors and then transmits payloads via LoRa.
 
 ### Hardware
 - [RP Pico 2W](https://www.adafruit.com/product/6087)
@@ -11,7 +11,7 @@ Firmware for a remote device that reads sensor data and then transmits payloads 
 
 ### Software
 
-This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core(s) of the RP2350 and leverages three device drivers that I authored and maintain:
+The [Embassy](https://github.com/embassy-rs/embassy) app uses the ARM core(s) of the RP2350 and leverages three device drivers that I authored and maintain:
 
 * [sx127x-lora](https://github.com/ardentTech/sx127x-lora)
 * [honeywell-mpr](https://github.com/ardentTech/honeywell-mpr)
@@ -19,12 +19,24 @@ This [embassy](https://github.com/embassy-rs/embassy) project uses the ARM core(
 
 ![Architecture](/assets/software_arch.png)
 
+#### Command + Response
+
+UART-based command + response component allows the host to interact with the target system by issuing pre-defined commands:
+
+| Command | Description                           |
+|---------|---------------------------------------|
+| add     | add one second to RTC datetime        |
+| led     | turn the LED on for one second        |
+| now     | read the current RTC timestamp        |
+| sub     | subtract one second from RTC datetime |
+
+The commands are (currently) case-sensitive, and are actively being developed.
+
 ### TODO
 
 - [ ] add sdcard for logging
-- [ ] expand command response system
 - [x] system diagram(s)
 - [x] pressure sensor
 - [x] air quality sensor
 - [x] command and response over UART
-- [ ] dormant + wake
+- [ ] dormant + wake (need secure boot)

@@ -1,10 +1,12 @@
 #![no_std]
 #![no_main]
 
+use core::fmt::Write as _;
 mod event;
 mod env_reading;
 mod types;
 mod command;
+mod error;
 
 #[allow(unused_imports)]
 use defmt::*;
@@ -27,7 +29,9 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use embedded_io_async::{Read, Write};
+use heapless::String;
 use honeywell_mpr::{Mpr, MprConfig, TransferFunction};
+use nxp_pcf8523::datetime::Pcf8523DateTime;
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::{Pcf8523T, TimerA, TimerSourceClock};
 use nxp_pcf8523::typedefs::TimerInterruptMode::Pulsed;
@@ -38,9 +42,10 @@ use sx127xlora::driver::{Sx127xLora, Sx127xLoraConfig};
 use sx127xlora::types::{Dio0Signal, Interrupt};
 use crate::command::{Command, CMD_SIZE};
 use crate::env_reading::EnvReading;
+use crate::error::HomeIotError;
 use crate::event::Event;
 use crate::event::Event::*;
-use crate::types::{I2c0Bus, LoraBuffer, Rtc, Spi1Bus};
+use crate::types::{I2c0Bus, LoraBuffer, Rtc, Spi1Bus, UartMsg};
 
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 
@@ -55,7 +60,8 @@ static LORA_TX: Signal<ThreadModeRawMutex, LoraBuffer> = Signal::new();
 static EXEC_CMD: Signal<ThreadModeRawMutex, Command> = Signal::new();
 static BLINK_LED: Signal<ThreadModeRawMutex, ()> = Signal::new();
 static RTC_ALARM: Signal<ThreadModeRawMutex, ()> = Signal::new();
-static UART_TX: Signal<ThreadModeRawMutex, &[u8]> = Signal::new();
+static UART_TX_MSG: Signal<ThreadModeRawMutex, UartMsg> = Signal::new();
+static UART_TX: Signal<ThreadModeRawMutex, u8> = Signal::new();
 
 // Channels --------------------------------------------------------------------
 static EVENT_CHANNEL: Channel<ThreadModeRawMutex, Event, 10> = Channel::new();
@@ -115,6 +121,20 @@ async fn rtc_now(rtc: &'static Rtc) -> u32 {
     rtc.now().await.unwrap().timestamp()
 }
 
+async fn rtc_add_sec(rtc: &'static Rtc) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.second = if now.second == 59 { 0 } else { now.second + 1 };
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcAddSec)
+}
+
+async fn rtc_sub_sec(rtc: &'static Rtc) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.second = if now.second == 0 { 59 } else { now.second - 1 };
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcSubSec)
+}
+
 #[embassy_executor::task]
 async fn lora_modem(spi_bus: &'static Spi1Bus, cs: Output<'static>, mut dio0: Input<'static>) {
     let sender = EVENT_CHANNEL.sender();
@@ -161,11 +181,15 @@ async fn event_bus() {
             RawCmdEntered(raw) => {
                 match Command::try_from(raw) {
                     Ok(cmd) => EXEC_CMD.signal(cmd),
-                    Err(_) => UART_TX.signal("invalid cmd :(\r\n\nenter cmd: ".as_bytes()),
+                    Err(_) => {
+                        let mut msg: UartMsg = String::new();
+                        core::writeln!(&mut msg, "invalid command: {:?}\r", raw).unwrap();
+                        UART_TX_MSG.signal(msg);
+                        cmd_prompt().await;
+                    },
                 }
             },
             RtcAlarmTriggered => {
-                debug!("rtc alarm triggered");
                 RTC_ALARM.signal(())
             },
         }
@@ -203,14 +227,35 @@ async fn blink_led(mut pin: Output<'static>) {
 }
 
 #[embassy_executor::task]
-async fn command_bus() {
+async fn command_bus(rtc: &'static Rtc) {
     loop {
         match EXEC_CMD.wait().await {
             Command::BlinkLed => {
                 BLINK_LED.signal(());
-                UART_TX.signal("executed BlinkLed cmd\r\n\nenter cmd: ".as_bytes());
             },
+            Command::RtcAddSec => {
+                if rtc_add_sec(rtc).await.is_err() {
+                    let mut msg: UartMsg = String::new();
+                    core::writeln!(&mut msg, "RtcAddSec failed\r").unwrap();
+                    UART_TX_MSG.signal(msg);
+                }
+            },
+            Command::RtcNow => {
+                let now = rtc_now(rtc).await;
+                let mut msg: UartMsg = String::new();
+                core::writeln!(&mut msg, "\n\r{}\r", now).unwrap();
+                UART_TX_MSG.signal(msg);
+            },
+            Command::RtcSubSec => {
+                if rtc_sub_sec(rtc).await.is_err() {
+                    let mut msg: UartMsg = String::new();
+                    core::writeln!(&mut msg, "RtcSubSec failed\r").unwrap();
+                    UART_TX_MSG.signal(msg);
+                }
+            }
         }
+        Timer::after_millis(10).await;
+        cmd_prompt().await;
     }
 }
 
@@ -236,7 +281,9 @@ async fn main(spawner: Spawner) {
     let i2c_bus = I2C0_BUS.init(Mutex::new(i2c));
 
     // rtc
-    let pcf8523 = Pcf8523::new(I2cDevice::new(i2c_bus), Pcf8523T {}).await.unwrap();
+    let mut pcf8523 = Pcf8523::new(I2cDevice::new(i2c_bus), Pcf8523T {}).await.unwrap();
+    let dt = Pcf8523DateTime::new(0, 0, 0, 8, 19, 25).unwrap();
+    pcf8523.set_datetime(dt).await.unwrap();
     static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
@@ -250,13 +297,14 @@ async fn main(spawner: Spawner) {
     let (tx, rx) = uart.split();
 
     spawner.spawn(event_bus().unwrap());
-    spawner.spawn(command_bus().unwrap());
+    spawner.spawn(command_bus(shared_rtc).unwrap());
     spawner.spawn(rtc_alarm(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
     spawner.spawn(lora_modem(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
     spawner.spawn(blink_led(Output::new(p.PIN_20, Level::Low)).unwrap());
     spawner.spawn(uart_rx(rx).unwrap());
     spawner.spawn(uart_tx(tx).unwrap());
+    cmd_prompt().await;
 }
 
 #[embassy_executor::task]
@@ -265,7 +313,6 @@ async fn uart_rx(mut rx: BufferedUartRx) {
     let mut pointer: usize = 0;
     let sender = EVENT_CHANNEL.sender();
 
-    // TODO uart tx msg (e.g. "ready for cmds")
     loop {
         let mut buf = [0; 1];
         match rx.read_exact(&mut buf).await {
@@ -276,11 +323,13 @@ async fn uart_rx(mut rx: BufferedUartRx) {
                     pointer = 0;
                 } else {
                     if pointer > CMD_SIZE - 1 {
-                        // TODO uart tx error msg
-                        error!("cmd too long!");
+                        let mut msg: UartMsg = String::new();
+                        core::writeln!(&mut msg, "invalid command length\r").unwrap();
+                        UART_TX_MSG.signal(msg);
                         cmd_buf = [0u8; CMD_SIZE];
                         pointer = 0;
                     } else {
+                        UART_TX.signal(buf[0]);
                         cmd_buf[pointer] = buf[0];
                         pointer += 1;
                     }
@@ -291,11 +340,25 @@ async fn uart_rx(mut rx: BufferedUartRx) {
     }
 }
 
+async fn cmd_prompt() {
+    let mut msg: UartMsg = String::new();
+    core::write!(&mut msg, "\n\renter cmd: ").unwrap();
+    UART_TX_MSG.signal(msg);
+}
+
+// TODO helper (macro?) for String alloc, format and UART_TX.signal with varargs
 #[embassy_executor::task]
 async fn uart_tx(mut tx: BufferedUartTx) {
-    tx.write_all("enter cmd: ".as_bytes()).await.unwrap();
     loop {
-        let msg = UART_TX.wait().await;
-        tx.write_all(msg).await.unwrap();
+        match select(UART_TX.wait(), UART_TX_MSG.wait()).await {
+            Either::First(byte) => {
+                //debug!("UART_TX matched");
+                tx.write_all(&[byte]).await.unwrap()
+            },
+            Either::Second(msg) => {
+                //debug!("UART_TX_MSG matched: {}", &msg.as_bytes());
+                tx.write_all(msg.as_bytes()).await.unwrap()
+            },
+        }
     }
 }
