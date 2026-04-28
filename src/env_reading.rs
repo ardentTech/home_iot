@@ -1,7 +1,13 @@
 use defmt::{Format, Formatter, write};
+use embassy_futures::join::join;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
-use crate::types::LoraBuffer;
+use crate::RTC_ALARM;
+use crate::event::Event::EnvReadingTaken;
+use crate::event::EVENT_CHANNEL;
+use crate::rtc::rtc_now;
+use crate::sensors::{read_aq_sensor, read_pressure_sensor};
+use crate::types::{I2c0Bus, LoraBuffer, Rtc};
 
 #[derive(Default)]
 pub(crate) struct EnvReadingBuilder {
@@ -79,5 +85,28 @@ impl Into<LoraBuffer> for EnvReading {
             buffer[i] = *b;
         }
         buffer
+    }
+}
+
+#[embassy_executor::task]
+pub(crate) async fn env_reading_task(i2c_bus: &'static I2c0Bus, rtc: &'static Rtc) {
+    let sender = EVENT_CHANNEL.sender();
+
+    loop {
+        RTC_ALARM.wait().await;
+        let (aq_res, pressure_res) = join(read_aq_sensor(i2c_bus), read_pressure_sensor(i2c_bus)).await;
+        let now = rtc_now(rtc).await;
+        let mut builder = EnvReading::builder(now);
+
+        if let Some(aq) = aq_res {
+            builder.pm1(aq.pm1);
+            builder.pm2_5(aq.pm2_5);
+            builder.pm10(aq.pm10);
+        }
+
+        if let Some(pressure) = pressure_res {
+            builder.air_pressure(pressure.psi() as u8);
+        }
+        sender.send(EnvReadingTaken(builder.build())).await;
     }
 }
