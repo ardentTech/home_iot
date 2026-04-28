@@ -1,6 +1,10 @@
+use core::fmt::Write;
 use defmt::Format;
-use embassy_sync::pubsub::subscriber::Sub;
+use embassy_time::Timer;
+use heapless::String;
 use crate::command::Command::*;
+use crate::{BLINK_LED, EXEC_CMD, RTC_NOW_REQ, RTC_NOW_RES, UART_TX_MSG};
+use crate::types::UartMsg;
 
 pub(crate) const CMD_SIZE: usize = 3;
 
@@ -30,4 +34,45 @@ impl TryFrom<[u8; CMD_SIZE]> for Command {
             _ => Err(())
         }
     }
+}
+
+
+#[embassy_executor::task]
+pub(crate) async fn command_bus() {
+    loop {
+        match EXEC_CMD.wait().await {
+            BlinkLed => {
+                BLINK_LED.signal(());
+            },
+            RtcAddSec => {
+                // if rtc_add_sec(rtc).await.is_err() {
+                //     let mut msg: UartMsg = String::new();
+                //     core::writeln!(&mut msg, "RtcAddSec failed\r").unwrap();
+                //     UART_TX_MSG.signal(msg);
+                // }
+            },
+            RtcNow => {
+                RTC_NOW_REQ.signal(());
+                let now = RTC_NOW_RES.wait().await;
+                let mut msg: UartMsg = String::new();
+                core::writeln!(&mut msg, "\n\r{}\r", now).unwrap();
+                UART_TX_MSG.signal(msg);
+            },
+            RtcSubSec => {
+                // if rtc_sub_sec(rtc).await.is_err() {
+                //     let mut msg: UartMsg = String::new();
+                //     core::writeln!(&mut msg, "RtcSubSec failed\r").unwrap();
+                //     UART_TX_MSG.signal(msg);
+                // }
+            }
+        }
+        Timer::after_millis(10).await;
+        // TODO cmd_prompt().await;
+    }
+}
+
+async fn cmd_prompt() {
+    let mut msg: UartMsg = String::new();
+    core::write!(&mut msg, "\n\renter cmd: ").unwrap();
+    UART_TX_MSG.signal(msg);
 }
