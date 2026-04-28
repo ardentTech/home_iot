@@ -23,7 +23,7 @@ use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, I2C0, UART1};
 use embassy_rp::spi::Spi;
 use embassy_rp::uart::{BufferedUart, BufferedUartRx, BufferedUartTx};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel::{Channel};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
@@ -60,6 +60,8 @@ static LORA_TX: Signal<ThreadModeRawMutex, LoraBuffer> = Signal::new();
 static EXEC_CMD: Signal<ThreadModeRawMutex, Command> = Signal::new();
 static BLINK_LED: Signal<ThreadModeRawMutex, ()> = Signal::new();
 static RTC_ALARM: Signal<ThreadModeRawMutex, ()> = Signal::new();
+static RTC_NOW_REQ: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static RTC_NOW_RES: Signal<CriticalSectionRawMutex, u32> = Signal::new();
 static UART_TX_MSG: Signal<ThreadModeRawMutex, UartMsg> = Signal::new();
 static UART_TX: Signal<ThreadModeRawMutex, u8> = Signal::new();
 
@@ -197,7 +199,7 @@ async fn event_bus() {
 }
 
 #[embassy_executor::task]
-async fn rtc_alarm(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
+async fn rtc_task(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
     let sender = EVENT_CHANNEL.sender();
     let cfg = TimerA::new(255, Pulsed, Countdown, TimerSourceClock::Frequency64Hz);
     {
@@ -206,12 +208,18 @@ async fn rtc_alarm(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
     }
 
     loop {
-        int1_pin.wait_for_falling_edge().await;
-        {
-            let mut rtc = rtc.lock().await;
-            rtc.clear_timer_a_interrupt(&cfg).await.unwrap();
+        match select(int1_pin.wait_for_falling_edge(), RTC_NOW_REQ.wait()).await {
+            Either::First(_) => {
+                {
+                    let mut rtc = rtc.lock().await;
+                    rtc.clear_timer_a_interrupt(&cfg).await.unwrap();
+                }
+                sender.send(RtcAlarmTriggered).await;
+            }
+            Either::Second(_) => {
+                RTC_NOW_RES.signal(rtc_now(rtc).await);
+            }
         }
-        sender.send(RtcAlarmTriggered).await;
     }
 }
 
@@ -227,31 +235,33 @@ async fn blink_led(mut pin: Output<'static>) {
 }
 
 #[embassy_executor::task]
-async fn command_bus(rtc: &'static Rtc) {
+async fn command_bus() {
     loop {
         match EXEC_CMD.wait().await {
             Command::BlinkLed => {
                 BLINK_LED.signal(());
             },
             Command::RtcAddSec => {
-                if rtc_add_sec(rtc).await.is_err() {
-                    let mut msg: UartMsg = String::new();
-                    core::writeln!(&mut msg, "RtcAddSec failed\r").unwrap();
-                    UART_TX_MSG.signal(msg);
-                }
+                // if rtc_add_sec(rtc).await.is_err() {
+                //     let mut msg: UartMsg = String::new();
+                //     core::writeln!(&mut msg, "RtcAddSec failed\r").unwrap();
+                //     UART_TX_MSG.signal(msg);
+                // }
             },
             Command::RtcNow => {
-                let now = rtc_now(rtc).await;
+                RTC_NOW_REQ.signal(());
+                let now = RTC_NOW_RES.wait().await;
+                //let now = rtc_now(rtc).await;
                 let mut msg: UartMsg = String::new();
                 core::writeln!(&mut msg, "\n\r{}\r", now).unwrap();
                 UART_TX_MSG.signal(msg);
             },
             Command::RtcSubSec => {
-                if rtc_sub_sec(rtc).await.is_err() {
-                    let mut msg: UartMsg = String::new();
-                    core::writeln!(&mut msg, "RtcSubSec failed\r").unwrap();
-                    UART_TX_MSG.signal(msg);
-                }
+                // if rtc_sub_sec(rtc).await.is_err() {
+                //     let mut msg: UartMsg = String::new();
+                //     core::writeln!(&mut msg, "RtcSubSec failed\r").unwrap();
+                //     UART_TX_MSG.signal(msg);
+                // }
             }
         }
         Timer::after_millis(10).await;
@@ -297,8 +307,8 @@ async fn main(spawner: Spawner) {
     let (tx, rx) = uart.split();
 
     spawner.spawn(event_bus().unwrap());
-    spawner.spawn(command_bus(shared_rtc).unwrap());
-    spawner.spawn(rtc_alarm(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
+    spawner.spawn(command_bus().unwrap());
+    spawner.spawn(rtc_task(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap());
     spawner.spawn(lora_modem(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
     spawner.spawn(blink_led(Output::new(p.PIN_20, Level::Low)).unwrap());
