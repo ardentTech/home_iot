@@ -1,4 +1,6 @@
 use embassy_rp::gpio::Input;
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::signal::Signal;
 use nxp_pcf8523::typedefs::{TimerA, TimerSourceClock};
 use nxp_pcf8523::typedefs::TimerInterruptMode::Pulsed;
 use nxp_pcf8523::typedefs::TimerMode::Countdown;
@@ -6,6 +8,8 @@ use crate::error::HomeIotError;
 use crate::event::Event::RtcAlarmTriggered;
 use crate::event::EVENT_CHANNEL;
 use crate::types::Rtc;
+
+pub(crate) static RTC_ALARM: Signal<ThreadModeRawMutex, ()> = Signal::new();
 
 #[embassy_executor::task]
 pub(crate) async fn rtc_alarm(rtc: &'static Rtc, mut int1_pin: Input<'static>) {

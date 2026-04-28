@@ -10,6 +10,7 @@ mod rtc;
 mod sensors;
 mod lora;
 mod uart;
+mod gpio;
 
 #[allow(unused_imports)]
 use defmt::*;
@@ -23,20 +24,18 @@ use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, I2C0, UART1};
 use embassy_rp::spi::Spi;
 use embassy_rp::uart::BufferedUart;
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::signal::Signal;
-use embassy_time::Timer;
 use nxp_pcf8523::datetime::Pcf8523DateTime;
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::Pcf8523T;
 use static_cell::StaticCell;
-use crate::command::{cmd_prompt, command_bus, Command};
+use crate::command::{cmd_prompt, command_bus};
 use crate::env_reading::{env_reading_task};
 use crate::event::event_bus;
+use crate::gpio::blink_led;
 use crate::lora::lora_modem;
 use crate::rtc::rtc_alarm;
-use crate::types::{I2c0Bus, LoraBuffer, Rtc, Spi1Bus, UartMsg};
+use crate::types::{I2c0Bus, Rtc, Spi1Bus};
 use crate::uart::{uart_rx, uart_tx};
 
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
@@ -46,26 +45,6 @@ bind_interrupts!(struct Irqs {
     I2C0_IRQ => InterruptHandler<I2C0>;
     UART1_IRQ => embassy_rp::uart::BufferedInterruptHandler<UART1>;
 });
-
-// Signals ---------------------------------------------------------------------
-static LORA_TX: Signal<ThreadModeRawMutex, LoraBuffer> = Signal::new();
-static EXEC_CMD: Signal<ThreadModeRawMutex, Command> = Signal::new();
-static BLINK_LED: Signal<ThreadModeRawMutex, ()> = Signal::new();
-static RTC_ALARM: Signal<ThreadModeRawMutex, ()> = Signal::new();
-static UART_TX_MSG: Signal<ThreadModeRawMutex, UartMsg> = Signal::new();
-static UART_TX: Signal<ThreadModeRawMutex, u8> = Signal::new();
-
-// Channels --------------------------------------------------------------------
-#[embassy_executor::task]
-async fn blink_led(mut pin: Output<'static>) {
-    pin.set_low();
-    loop {
-        BLINK_LED.wait().await;
-        pin.set_high();
-        Timer::after_secs(1).await;
-        pin.set_low();
-    }
-}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {

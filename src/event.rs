@@ -4,11 +4,13 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 use heapless::String;
-use crate::command::{cmd_prompt, Command, CMD_SIZE};
+use crate::command::{cmd_prompt, Command, CMD_SIZE, EXEC_CMD};
 use crate::env_reading::EnvReading;
 use crate::event::Event::{EnvReadingTaken, LoraTxDoneInterruptCleared, LoraTxDoneInterruptClearedErr, LoraTxStarted, LoraTxStartedErr, RawCmdEntered, RtcAlarmTriggered};
-use crate::{EXEC_CMD, LORA_TX, RTC_ALARM, UART_TX_MSG};
+use crate::lora::LORA_TX;
+use crate::rtc::RTC_ALARM;
 use crate::types::UartMsg;
+use crate::uart::UART_TX;
 
 pub(crate) static EVENT_CHANNEL: Channel<ThreadModeRawMutex, Event, 10> = Channel::new();
 
@@ -25,6 +27,7 @@ pub(crate) enum Event {
 #[embassy_executor::task]
 pub(crate) async fn event_bus() {
     let receiver = EVENT_CHANNEL.receiver();
+    let uart_sender = UART_TX.sender();
 
     loop {
         let event = receiver.receive().await;
@@ -42,7 +45,7 @@ pub(crate) async fn event_bus() {
                     Err(_) => {
                         let mut msg: UartMsg = String::new();
                         core::writeln!(&mut msg, "\n\rinvalid command\r").unwrap();
-                        UART_TX_MSG.signal(msg);
+                        uart_sender.send(msg).await;
                         Timer::after_millis(250).await;
                         cmd_prompt().await;
                     },

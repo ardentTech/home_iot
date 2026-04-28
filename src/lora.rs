@@ -1,12 +1,16 @@
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_futures::select::{select, Either};
 use embassy_rp::gpio::{Input, Output};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::signal::Signal;
 use sx127xlora::driver::{Sx127xLora, Sx127xLoraConfig};
 use sx127xlora::types::{Dio0Signal, Interrupt};
-use crate::{LORA_FREQUENCY_HZ, LORA_TX};
+use crate::{LORA_FREQUENCY_HZ};
 use crate::event::Event::{LoraTxDoneInterruptCleared, LoraTxDoneInterruptClearedErr, LoraTxStarted, LoraTxStartedErr};
 use crate::event::EVENT_CHANNEL;
-use crate::types::Spi1Bus;
+use crate::types::{LoraBuffer, Spi1Bus};
+
+pub(crate) static LORA_TX: Signal<ThreadModeRawMutex, LoraBuffer> = Signal::new();
 
 #[embassy_executor::task]
 pub(crate) async fn lora_modem(spi_bus: &'static Spi1Bus, cs: Output<'static>, mut dio0: Input<'static>) {
@@ -14,6 +18,7 @@ pub(crate) async fn lora_modem(spi_bus: &'static Spi1Bus, cs: Output<'static>, m
     let spi_dev = SpiDevice::new(&spi_bus, cs);
     let mut config = Sx127xLoraConfig::default();
     config.frequency = LORA_FREQUENCY_HZ;
+    // TODO get rid of all of these unwraps
     let mut sx127x = Sx127xLora::new(spi_dev, config).await.expect("driver init failed :(");
     sx127x.set_temp_monitor(false).await.expect("disable temp monitor failed :(");
     sx127x.set_pa_boost(20).await.expect("set_amplifier_boost failed :(");

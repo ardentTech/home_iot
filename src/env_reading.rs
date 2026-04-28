@@ -2,10 +2,9 @@ use defmt::{Format, Formatter, write};
 use embassy_futures::join::join;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
-use crate::RTC_ALARM;
 use crate::event::Event::EnvReadingTaken;
 use crate::event::EVENT_CHANNEL;
-use crate::rtc::rtc_now;
+use crate::rtc::{rtc_now, RTC_ALARM};
 use crate::sensors::{read_aq_sensor, read_pressure_sensor};
 use crate::types::{I2c0Bus, LoraBuffer, Rtc};
 
