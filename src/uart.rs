@@ -1,13 +1,18 @@
 use core::fmt::Write as _;
-use embassy_futures::select::{select, Either};
-use embassy_rp::uart::{BufferedUartRx, BufferedUartTx};
+use embassy_executor::Spawner;
+use embassy_rp::gpio::{Input, Output};
+use embassy_rp::Peri;
+use embassy_rp::peripherals::{PIN_4, PIN_5, UART1};
+use embassy_rp::uart::{BufferedUart, BufferedUartRx, BufferedUartTx};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embedded_io_async::{Read, Write};
 use heapless::String;
-use crate::command::CMD_SIZE;
+use static_cell::StaticCell;
+use crate::command::{cmd_prompt, CMD_SIZE};
 use crate::event::Event::RawCmdEntered;
 use crate::event::EVENT_CHANNEL;
+use crate::Irqs;
 use crate::types::UartMsg;
 
 pub(crate) static UART_TX: Channel<ThreadModeRawMutex, UartMsg, 8> = Channel::new();
@@ -56,4 +61,18 @@ pub(crate) async fn uart_tx(mut tx: BufferedUartTx) {
         let msg = receiver.receive().await;
         tx.write_all(msg.as_bytes()).await.unwrap();
     }
+}
+
+#[embassy_executor::task]
+pub(crate) async fn init_uart(spawner: Spawner, tx_pin: Peri<'static, PIN_4>, rx_pin: Peri<'static, PIN_5>, uart: Peri<'static, UART1>) {
+    static TX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
+    let tx_buf = &mut TX_BUF.init([0; 16])[..];
+    static RX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
+    let rx_buf = &mut RX_BUF.init([0; 16])[..];
+    let uart = BufferedUart::new(uart, tx_pin, rx_pin, Irqs, tx_buf, rx_buf, embassy_rp::uart::Config::default());
+    let (tx, rx) = uart.split();
+
+    spawner.spawn(uart_rx(rx).unwrap());
+    spawner.spawn(uart_tx(tx).unwrap());
+    cmd_prompt().await;
 }

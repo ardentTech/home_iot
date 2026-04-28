@@ -23,20 +23,19 @@ use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::i2c::{Config, I2c, InterruptHandler};
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, I2C0, UART1};
 use embassy_rp::spi::Spi;
-use embassy_rp::uart::BufferedUart;
 use embassy_sync::mutex::Mutex;
 use nxp_pcf8523::datetime::Pcf8523DateTime;
 use nxp_pcf8523::Pcf8523;
 use nxp_pcf8523::typedefs::Pcf8523T;
 use static_cell::StaticCell;
-use crate::command::{cmd_prompt, command_bus};
+use crate::command::command_bus;
 use crate::env_reading::{env_reading_task};
 use crate::event::event_bus;
 use crate::gpio::blink_led;
 use crate::lora::lora_modem;
 use crate::rtc::rtc_alarm;
 use crate::types::{I2c0Bus, Rtc, Spi1Bus};
-use crate::uart::{uart_rx, uart_tx};
+use crate::uart::init_uart;
 
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 
@@ -74,22 +73,11 @@ async fn main(spawner: Spawner) {
     static SHARED_RTC: StaticCell<Rtc> = StaticCell::new();
     let shared_rtc = SHARED_RTC.init(Mutex::new(pcf8523));
 
-    // uart1
-    let (tx_pin, rx_pin, uart) = (p.PIN_4, p.PIN_5, p.UART1);
-    static TX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
-    let tx_buf = &mut TX_BUF.init([0; 16])[..];
-    static RX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
-    let rx_buf = &mut RX_BUF.init([0; 16])[..];
-    let uart = BufferedUart::new(uart, tx_pin, rx_pin, Irqs, tx_buf, rx_buf, embassy_rp::uart::Config::default());
-    let (tx, rx) = uart.split();
-
     spawner.spawn(event_bus().unwrap());
     spawner.spawn(command_bus(shared_rtc).unwrap());
     spawner.spawn(rtc_alarm(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap()); // TODO does this have to be a task?
     spawner.spawn(lora_modem(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
     spawner.spawn(blink_led(Output::new(p.PIN_20, Level::Low)).unwrap());
-    spawner.spawn(uart_rx(rx).unwrap());
-    spawner.spawn(uart_tx(tx).unwrap());
-    cmd_prompt().await;
+    spawner.spawn(init_uart(spawner, p.PIN_4, p.PIN_5, p.UART1).unwrap());
 }

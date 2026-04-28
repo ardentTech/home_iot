@@ -20,6 +20,7 @@ pub(crate) async fn rtc_alarm(rtc: &'static Rtc, mut int1_pin: Input<'static>) {
         rtc.start_timer_a(&cfg).await.unwrap();
     }
 
+    // TODO RTC now?
     loop {
         int1_pin.wait_for_falling_edge().await;
         {
