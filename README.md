@@ -11,7 +11,8 @@ Rust `#![no_std]` firmware for a remote device that reads from various sensors a
 
 ### Software
 
-The [Embassy](https://github.com/embassy-rs/embassy) app uses the ARM core(s) of the RP2350 and leverages three device drivers that I authored and maintain:
+The [Embassy](https://github.com/embassy-rs/embassy) app uses the ARM core(s) of the RP2350 and leverages three device
+drivers that I authored and maintain:
 
 * [sx127x-lora](https://github.com/ardentTech/sx127x-lora)
 * [honeywell-mpr](https://github.com/ardentTech/honeywell-mpr)
@@ -21,7 +22,8 @@ The [Embassy](https://github.com/embassy-rs/embassy) app uses the ARM core(s) of
 
 #### Command + Response
 
-UART-based command + response component allows the host to interact with the target system by issuing pre-defined commands:
+UART-based command + response component allows the host to interact with the target system by issuing pre-defined
+commands:
 
 | Command | Description                           |
 |---------|---------------------------------------|
@@ -40,3 +42,8 @@ The commands are (currently) case-sensitive, and are actively being developed.
 - [x] air quality sensor
 - [x] command and response over UART
 - [ ] dormant + wake (need secure boot)
+- [ ] detect UART connection and set flag for cmd bus
+- [x] add commands for yellow and red LEDs
+- [ ] green, yellow and red LEDs for AQI? app state?
+- [ ] UART help command
+- [ ] display mode as LED flag?

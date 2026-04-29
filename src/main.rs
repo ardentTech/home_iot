@@ -31,12 +31,13 @@ use static_cell::StaticCell;
 use crate::command::command_bus;
 use crate::env_reading::{env_reading_task};
 use crate::event::event_bus;
-use crate::gpio::blink_led;
+use crate::gpio::{green_led, red_led, yellow_led};
 use crate::lora::lora_modem;
 use crate::rtc::rtc_alarm;
 use crate::types::{I2c0Bus, Rtc, Spi1Bus};
 use crate::uart::init_uart;
 
+const I2C_FREQUENCY_HZ: u32 = 100_000; // only bus speed that works with the rtc, pressure and aq peripherals
 const LORA_FREQUENCY_HZ: u32 = 915_000_000;
 
 bind_interrupts!(struct Irqs {
@@ -61,7 +62,7 @@ async fn main(spawner: Spawner) {
     let sda = p.PIN_16;
     let scl = p.PIN_17;
     let mut config = Config::default();
-    config.frequency = 100_000; // this is the only I2C bus speed that works with rtc, pressure and aq peripherals
+    config.frequency = I2C_FREQUENCY_HZ;
     let i2c = I2c::new_async(p.I2C0, scl, sda, Irqs, config);
     static I2C0_BUS: StaticCell<I2c0Bus> = StaticCell::new();
     let i2c_bus = I2C0_BUS.init(Mutex::new(i2c));
@@ -78,6 +79,8 @@ async fn main(spawner: Spawner) {
     spawner.spawn(rtc_alarm(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap()); // TODO does this have to be a task?
     spawner.spawn(lora_modem(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
-    spawner.spawn(blink_led(Output::new(p.PIN_20, Level::Low)).unwrap());
+    spawner.spawn(green_led(Output::new(p.PIN_21, Level::Low)).unwrap());
+    spawner.spawn(yellow_led(Output::new(p.PIN_20, Level::Low)).unwrap());
+    spawner.spawn(red_led(Output::new(p.PIN_19, Level::Low)).unwrap());
     spawner.spawn(init_uart(spawner, p.PIN_4, p.PIN_5, p.UART1).unwrap());
 }
