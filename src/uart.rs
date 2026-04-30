@@ -1,6 +1,5 @@
 use core::fmt::Write as _;
 use embassy_executor::Spawner;
-use embassy_rp::gpio::{Input, Output};
 use embassy_rp::Peri;
 use embassy_rp::peripherals::{PIN_4, PIN_5, UART1};
 use embassy_rp::uart::{BufferedUart, BufferedUartRx, BufferedUartTx};
@@ -29,7 +28,7 @@ pub(crate) async fn uart_rx(mut rx: BufferedUartRx) {
         match rx.read_exact(&mut buf).await {
             Ok(_) => {
                 if buf[0] == 13 {
-                    event_sender.send(RawCmdEntered(cmd_buf)).await;
+                    event_sender.send(RawCmdEntered(cmd_buf.clone())).await;
                     cmd_buf = [0u8; CMD_SIZE];
                     pointer = 0;
                 } else {

@@ -46,7 +46,7 @@ pub(crate) async fn event_bus() {
                         let mut msg: UartMsg = String::new();
                         core::writeln!(&mut msg, "\n\rinvalid command\r").unwrap();
                         uart_sender.send(msg).await;
-                        Timer::after_millis(250).await;
+                        Timer::after_millis(250).await; // TODO still needed?
                         cmd_prompt().await;
                     },
                 }

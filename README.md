@@ -25,12 +25,20 @@ drivers that I authored and maintain:
 UART-based command + response component allows the host to interact with the target system by issuing pre-defined
 commands:
 
-| Command | Description                           |
-|---------|---------------------------------------|
-| add     | add one second to RTC datetime        |
-| led     | turn the LED on for one second        |
-| now     | read the current RTC timestamp        |
-| sub     | subtract one second from RTC datetime |
+| Command           | Args | Description                           |
+|-------------------|------|---------------------------------------|
+| green_led_toggle  |      | toggle the green LED                  |
+| red_led_toggle    |      | toggle the red LED                    |
+| rtc_add_sec       |      | add one second from RTC datetime      |
+| rtc_now           |      | print the current timestamp           |
+| rtc_set_day       | <u8> | set the RTC day                       |
+| rtc_set_hour      | <u8> | set the RTC hour                      |
+| rtc_set_min       | <u8> | set the RTC minute                    |
+| rtc_set_month     | <u8> | set the RTC month                     |
+| rtc_set_sec       | <u8> | set the RTC second                    |
+| rtc_set_year      | <u8> | set the RTC year                      |
+| rtc_sub_sec       |      | subtract one second from RTC datetime |
+| yellow_led_toggle |      | toggle the yellow LED                 |
 
 The commands are (currently) case-sensitive, and are actively being developed.
 

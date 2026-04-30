@@ -43,6 +43,48 @@ pub(crate) async fn rtc_add_sec(rtc: &'static Rtc) -> Result<(), HomeIotError> {
     rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcAddSec)
 }
 
+pub(crate) async fn rtc_set_day(rtc: &'static Rtc, day: u8) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.day = day;
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcSetDay)
+}
+
+pub(crate) async fn rtc_set_hour(rtc: &'static Rtc, hour: u8) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.hour = hour;
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcSetDay)
+}
+
+pub(crate) async fn rtc_set_min(rtc: &'static Rtc, min: u8) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.minute = min;
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcSetDay)
+}
+
+pub(crate) async fn rtc_set_month(rtc: &'static Rtc, month: u8) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.month = month;
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcSetDay)
+}
+
+pub(crate) async fn rtc_set_sec(rtc: &'static Rtc, sec: u8) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.second = sec;
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcSetDay)
+}
+
+pub(crate) async fn rtc_set_year(rtc: &'static Rtc, year: u8) -> Result<(), HomeIotError> {
+    let mut rtc = rtc.lock().await;
+    let mut now = rtc.now().await.unwrap();
+    now.year = year;
+    rtc.set_datetime(now).await.map_err(|_| HomeIotError::RtcSetDay)
+}
+
 pub(crate) async fn rtc_sub_sec(rtc: &'static Rtc) -> Result<(), HomeIotError> {
     let mut rtc = rtc.lock().await;
     let mut now = rtc.now().await.unwrap();
