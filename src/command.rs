@@ -1,11 +1,11 @@
 use core::fmt::Write;
-use defmt::{debug, Format};
+use defmt::Format;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::signal::Signal;
 use heapless::{String, Vec};
 use crate::command::Command::*;
+use crate::gpio::{Led, PULSE_LED};
 use crate::types::{Rtc, UartMsg};
-use crate::gpio::{LedCommand, GREEN_LED, RED_LED, YELLOW_LED};
 use crate::rtc::{rtc_add_sec, rtc_now, rtc_set_day, rtc_set_hour, rtc_set_min, rtc_set_month, rtc_set_sec, rtc_set_year, rtc_sub_sec};
 use crate::uart::UART_TX;
 
@@ -144,13 +144,13 @@ pub(crate) async fn command_bus(rtc: &'static Rtc) {
                 }
             },
             PulseGreenLed => {
-                GREEN_LED.signal(LedCommand::Pulse);
+                PULSE_LED.signal(Led::Green);
             },
             PulseRedLed => {
-                RED_LED.signal(LedCommand::Pulse);
+                PULSE_LED.signal(Led::Red);
             },
             PulseYellowLed => {
-                YELLOW_LED.signal(LedCommand::Pulse);
+                PULSE_LED.signal(Led::Yellow);
             },
         }
         cmd_prompt().await;

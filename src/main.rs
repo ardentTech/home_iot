@@ -31,7 +31,7 @@ use static_cell::StaticCell;
 use crate::command::command_bus;
 use crate::env_reading::{env_reading_task};
 use crate::event::event_bus;
-use crate::gpio::{green_led, red_led, yellow_led};
+use crate::gpio::{pulse_led_task};
 use crate::lora::lora_modem;
 use crate::rtc::rtc_alarm;
 use crate::types::{I2c0Bus, Rtc, Spi1Bus};
@@ -79,8 +79,6 @@ async fn main(spawner: Spawner) {
     spawner.spawn(rtc_alarm(shared_rtc, Input::new(p.PIN_8, Pull::Up)).unwrap());
     spawner.spawn(env_reading_task(i2c_bus, shared_rtc).unwrap()); // TODO does this have to be a task?
     spawner.spawn(lora_modem(spi_bus, Output::new(p.PIN_13, Level::High), Input::new(p.PIN_15, Pull::Down)).unwrap());
-    spawner.spawn(green_led(Output::new(p.PIN_21, Level::Low)).unwrap());
-    spawner.spawn(yellow_led(Output::new(p.PIN_20, Level::Low)).unwrap());
-    spawner.spawn(red_led(Output::new(p.PIN_19, Level::Low)).unwrap());
+    spawner.spawn(pulse_led_task(Output::new(p.PIN_21, Level::Low), Output::new(p.PIN_20, Level::Low), Output::new(p.PIN_19, Level::Low)).unwrap());
     spawner.spawn(init_uart(spawner, p.PIN_4, p.PIN_5, p.UART1).unwrap());
 }
