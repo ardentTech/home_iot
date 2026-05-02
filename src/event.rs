@@ -7,6 +7,7 @@ use heapless::String;
 use crate::command::{cmd_prompt, Command, CMD_SIZE, EXEC_CMD};
 use crate::env_reading::EnvReading;
 use crate::event::Event::{EnvReadingTaken, LoraTxDoneInterruptCleared, LoraTxDoneInterruptClearedErr, LoraTxStarted, LoraTxStartedErr, RawCmdEntered, RtcAlarmTriggered};
+use crate::gpio::{LedCommand, GREEN_LED};
 use crate::lora::LORA_TX;
 use crate::rtc::RTC_ALARM;
 use crate::types::UartMsg;
@@ -35,7 +36,12 @@ pub(crate) async fn event_bus() {
             EnvReadingTaken(env_reading) => {
                 LORA_TX.signal(env_reading.into());
             },
-            LoraTxDoneInterruptCleared => debug!("lora tx done interrupt cleared"),
+            LoraTxDoneInterruptCleared => {
+                debug!("lora tx done interrupt cleared");
+                GREEN_LED.signal(LedCommand::Toggle);
+                Timer::after_millis(250).await;
+                GREEN_LED.signal(LedCommand::Toggle);
+            },
             LoraTxDoneInterruptClearedErr => error!("lora tx done interrupt cleared err :("),
             LoraTxStarted => debug!("lora tx started"),
             LoraTxStartedErr => error!("lora tx started err :("),

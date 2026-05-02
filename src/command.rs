@@ -24,9 +24,9 @@ pub(crate) enum Command {
     RtcSetSec(u8),
     RtcSetYear(u8),
     RtcSubSec,
-    ToggleGreenLed,
-    ToggleRedLed,
-    ToggleYellowLed,
+    PulseGreenLed,
+    PulseRedLed,
+    PulseYellowLed,
 }
 
 impl TryFrom<[u8; CMD_SIZE]> for Command {
@@ -39,8 +39,8 @@ impl TryFrom<[u8; CMD_SIZE]> for Command {
 
         if let Some(cmd) = iter.next() {
             match cmd.trim_matches(char::from(0)) {
-                "green_led_toggle" => Ok(ToggleGreenLed),
-                "red_led_toggle" => Ok(ToggleRedLed),
+                "green_led_pulse" => Ok(PulseGreenLed),
+                "red_led_pulse" => Ok(PulseRedLed),
                 "rtc_add_sec" => Ok(RtcAddSec),
                 "rtc_now" => Ok(RtcNow),
                 // TODO need to validate day, hour, etc.?
@@ -75,7 +75,7 @@ impl TryFrom<[u8; CMD_SIZE]> for Command {
                     } else { Err(()) }
                 },
                 "rtc_sub_sec" => Ok(RtcSubSec),
-                "yellow_led_toggle" => Ok(ToggleYellowLed),
+                "yellow_led_pulse" => Ok(PulseYellowLed),
                 _ => Err(())
             }
         } else {
@@ -143,14 +143,14 @@ pub(crate) async fn command_bus(rtc: &'static Rtc) {
                     uart_sender.send(e.into()).await;
                 }
             },
-            ToggleGreenLed => {
-                GREEN_LED.signal(LedCommand::Toggle);
+            PulseGreenLed => {
+                GREEN_LED.signal(LedCommand::Pulse);
             },
-            ToggleRedLed => {
-                RED_LED.signal(LedCommand::Toggle);
+            PulseRedLed => {
+                RED_LED.signal(LedCommand::Pulse);
             },
-            ToggleYellowLed => {
-                YELLOW_LED.signal(LedCommand::Toggle);
+            PulseYellowLed => {
+                YELLOW_LED.signal(LedCommand::Pulse);
             },
         }
         cmd_prompt().await;

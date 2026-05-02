@@ -11,8 +11,8 @@ Rust `#![no_std]` firmware for a remote device that reads from various sensors a
 
 ### Software
 
-The [Embassy](https://github.com/embassy-rs/embassy) app uses the ARM core(s) of the RP2350 and leverages three device
-drivers that I authored and maintain:
+The [Embassy](https://github.com/embassy-rs/embassy) app uses an ARM core of the RP2350 wakes from an RTC alarm, reads sensors and then transmits a
+payload via LoRa. The system leverages three device drivers that I authored and maintain:
 
 * [sx127x-lora](https://github.com/ardentTech/sx127x-lora)
 * [honeywell-mpr](https://github.com/ardentTech/honeywell-mpr)
@@ -25,20 +25,20 @@ drivers that I authored and maintain:
 UART-based command + response component allows the host to interact with the target system by issuing pre-defined
 commands:
 
-| Command           | Args | Description                           |
-|-------------------|------|---------------------------------------|
-| green_led_toggle  |      | toggle the green LED                  |
-| red_led_toggle    |      | toggle the red LED                    |
-| rtc_add_sec       |      | add one second from RTC datetime      |
-| rtc_now           |      | print the current timestamp           |
-| rtc_set_day       | <u8> | set the RTC day                       |
-| rtc_set_hour      | <u8> | set the RTC hour                      |
-| rtc_set_min       | <u8> | set the RTC minute                    |
-| rtc_set_month     | <u8> | set the RTC month                     |
-| rtc_set_sec       | <u8> | set the RTC second                    |
-| rtc_set_year      | <u8> | set the RTC year                      |
-| rtc_sub_sec       |      | subtract one second from RTC datetime |
-| yellow_led_toggle |      | toggle the yellow LED                 |
+| Command          | Args | Description                           |
+|------------------|------|---------------------------------------|
+| green_led_pulse  |      | pulse the green LED                   |
+| red_led_pulse    |      | pulse the red LED                     |
+| rtc_add_sec      |      | add one second from RTC datetime      |
+| rtc_now          |      | print the current timestamp           |
+| rtc_set_day      | <u8> | set the RTC day                       |
+| rtc_set_hour     | <u8> | set the RTC hour                      |
+| rtc_set_min      | <u8> | set the RTC minute                    |
+| rtc_set_month    | <u8> | set the RTC month                     |
+| rtc_set_sec      | <u8> | set the RTC second                    |
+| rtc_set_year     | <u8> | set the RTC year                      |
+| rtc_sub_sec      |      | subtract one second from RTC datetime |
+| yellow_led_pulse |      | pulse the yellow LED                  |
 
 The commands are (currently) case-sensitive, and are actively being developed.
 
@@ -50,8 +50,6 @@ The commands are (currently) case-sensitive, and are actively being developed.
 - [x] air quality sensor
 - [x] command and response over UART
 - [ ] dormant + wake (need secure boot)
-- [ ] detect UART connection and set flag for cmd bus
 - [x] add commands for yellow and red LEDs
-- [ ] green, yellow and red LEDs for AQI? app state?
+- [ ] green, yellow and red LEDs for AQI
 - [ ] UART help command
-- [ ] display mode as LED flag?
