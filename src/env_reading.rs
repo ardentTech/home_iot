@@ -2,6 +2,7 @@ use defmt::{Format, Formatter, write};
 use embassy_futures::join::join;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
+use pmsa003i::AirQuality;
 use crate::event::Event::EnvReadingTaken;
 use crate::event::EVENT_CHANNEL;
 use crate::rtc::{rtc_now, RTC_ALARM};
@@ -11,6 +12,8 @@ use crate::types::{I2c0Bus, LoraBuffer, Rtc};
 #[derive(Default)]
 pub(crate) struct EnvReadingBuilder {
     air_pressure: Option<u8>,
+    aqi_pm2_5: Option<AirQuality>,
+    aqi_pm10: Option<AirQuality>,
     pm1: Option<u16>,
     pm2_5: Option<u16>,
     pm10: Option<u16>,
@@ -20,6 +23,8 @@ impl EnvReadingBuilder {
     fn new(timestamp: u32) -> Self {
         Self {
             air_pressure: None,
+            aqi_pm2_5: None,
+            aqi_pm10: None,
             pm1: None,
             pm2_5: None,
             pm10: None,
@@ -29,6 +34,14 @@ impl EnvReadingBuilder {
 
     pub fn air_pressure(&mut self, psi: u8) {
         self.air_pressure = Some(psi);
+    }
+
+    pub fn aqi_pm2_5(&mut self, aqi_pm2_5: Option<AirQuality>) {
+        self.aqi_pm2_5 = aqi_pm2_5;
+    }
+
+    pub fn aqi_pm10(&mut self, aqi_pm10: Option<AirQuality>) {
+        self.aqi_pm10 = aqi_pm10;
     }
 
     pub fn pm1(&mut self, pm: u16) {
@@ -46,6 +59,14 @@ impl EnvReadingBuilder {
     pub fn build(self) -> EnvReading {
         EnvReading {
             air_pressure: self.air_pressure.unwrap_or(255),
+            aqi_pm2_5: match self.aqi_pm2_5 {
+                Some(aq) => aq.level() as u8,
+                None => 255
+            },
+            aqi_pm10: match self.aqi_pm10 {
+                Some(aq) => aq.level() as u8,
+                None => 255
+            },
             pm1: self.pm1.unwrap_or(65535),
             pm2_5: self.pm2_5.unwrap_or(65535),
             pm10: self.pm10.unwrap_or(65535),
@@ -58,6 +79,8 @@ impl EnvReadingBuilder {
 #[packed_struct(endian = "lsb")]
 pub(crate) struct EnvReading { // TODO explore bit packing opportunities
     air_pressure: u8,
+    aqi_pm2_5: u8,
+    aqi_pm10: u8,
     pm1: u16,
     pm2_5: u16,
     pm10: u16,
@@ -72,13 +95,17 @@ impl EnvReading {
 
 impl Format for EnvReading {
     fn format(&self, fmt: Formatter) {
-        write!(fmt, "air pressure: {}psi, pm1: {}, pm2.5: {}, pm10: {}", self.air_pressure, self.pm1, self.pm2_5, self.pm10);
+        write!(
+            fmt,
+            "air pressure: {}psi, aqi_pm2_5: {}, aqi_pm10: {}, pm1: {}, pm2.5: {}, pm10: {}",
+            self.air_pressure, self.aqi_pm2_5, self.aqi_pm10, self.pm1, self.pm2_5, self.pm10
+        );
     }
 }
 
 impl Into<LoraBuffer> for EnvReading {
     fn into(self) -> LoraBuffer {
-        let payload: [u8; 11] = self.pack().unwrap();
+        let payload: [u8; 13] = self.pack().unwrap();
         let mut buffer = [0; 128];
         for (i, b) in payload.iter().enumerate() {
             buffer[i] = *b;
@@ -101,6 +128,8 @@ pub(crate) async fn env_reading_task(i2c_bus: &'static I2c0Bus, rtc: &'static Rt
             builder.pm1(aq.pm1);
             builder.pm2_5(aq.pm2_5);
             builder.pm10(aq.pm10);
+            builder.aqi_pm2_5(aq.aqi_pm2_5.ok());
+            builder.aqi_pm10(aq.aqi_pm10.ok());
         }
 
         if let Some(pressure) = pressure_res {

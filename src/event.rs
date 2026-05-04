@@ -34,6 +34,7 @@ pub(crate) async fn event_bus() {
         let event = receiver.receive().await;
         match event {
             EnvReadingTaken(env_reading) => {
+                debug!("env_reading: {:?}", env_reading);
                 LORA_TX.signal(env_reading.into());
             },
             LoraTxDoneInterruptCleared => {

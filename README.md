@@ -51,5 +51,5 @@ The commands are (currently) case-sensitive, and are actively being developed.
 - [x] command and response over UART
 - [ ] dormant + wake (need secure boot)
 - [x] add commands for yellow and red LEDs
-- [ ] green, yellow and red LEDs for AQI
+- [x] AQI in payload
 - [ ] UART help command
