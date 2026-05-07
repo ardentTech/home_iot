@@ -9,6 +9,8 @@ Rust `#![no_std]` firmware for a remote device that reads from various sensors a
 - [NXP PCF8523T](https://www.nxp.com/part/PCF8523T)
 - [Pico Debug Probe](https://www.adafruit.com/product/5699) (optional but helpful)
 
+![Wiring](/assets/wiring.jpg)
+
 ### Software
 
 The [Embassy](https://github.com/embassy-rs/embassy) app uses an ARM core of the RP2350 wakes from an RTC alarm, reads sensors and then transmits a
